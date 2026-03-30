@@ -1,0 +1,83 @@
+/* DocVault custom styles */
+
+/* Drop zone */
+.drop-zone {
+    border: 2px dashed var(--bs-border-color);
+    border-radius: 0.5rem;
+    padding: 2rem;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background-color 0.2s;
+}
+
+.drop-zone:hover,
+.drop-zone.drag-over {
+    border-color: var(--bs-primary);
+    background-color: rgba(var(--bs-primary-rgb), 0.05);
+}
+
+/* Document cards */
+.doc-card {
+    transition: transform 0.15s, box-shadow 0.15s;
+    overflow: hidden;
+}
+
+.doc-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.1);
+}
+
+.doc-thumb {
+    height: 160px;
+    object-fit: cover;
+    background: var(--bs-tertiary-bg);
+}
+
+/* OCR text display */
+.ocr-text-box {
+    font-family: var(--bs-font-monospace);
+    font-size: 0.82rem;
+}
+
+/* Sidebar tag list */
+#tagSidebar .list-group-item {
+    font-size: 0.9rem;
+    padding: 0.4rem 0.75rem;
+}
+
+/* Search clear button */
+#clearSearchBtn {
+    border-left: 0;
+}
+
+/* Mobile adjustments */
+@media (max-width: 767.98px) {
+    .doc-thumb {
+        height: 120px;
+    }
+
+    .navbar-brand {
+        font-size: 1rem;
+    }
+}
+
+/* Maintenance page */
+#page-maintenance .card {
+    border: none;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+#page-maintenance .nav-tabs .nav-link.active {
+    font-weight: 600;
+}
+
+/* Access denied overlay */
+#accessDenied {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--bs-body-bg);
+    z-index: 1090;
+}

@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DocVault</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    <link href="styles.css" rel="stylesheet">
+</head>
+<body>
+
+<!-- Navbar -->
+<nav class="navbar navbar-expand-lg bg-body-tertiary border-bottom sticky-top">
+    <div class="container-fluid">
+        <a class="navbar-brand fw-bold" href="#" onclick="showPage('documents'); return false;">
+            <i class="bi bi-archive"></i> DocVault
+        </a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navContent">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navContent">
+            <form class="d-flex flex-grow-1 mx-lg-4 my-2 my-lg-0" id="searchForm" onsubmit="handleSearch(event)">
+                <div class="input-group">
+                    <input type="text" class="form-control" id="searchInput" placeholder="Search documents...">
+                    <button class="btn btn-outline-primary" type="submit"><i class="bi bi-search"></i></button>
+                    <button class="btn btn-outline-secondary" type="button" id="clearSearchBtn" onclick="clearSearch()" style="display:none;">
+                        <i class="bi bi-x-lg"></i>
+                    </button>
+                </div>
+            </form>
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a class="nav-link" href="#" onclick="showUploadModal(); return false;">
+                        <i class="bi bi-cloud-upload"></i> Upload
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="#" onclick="showPage('tags'); return false;">
+                        <i class="bi bi-tags"></i> Tags
+                    </a>
+                </li>
+                <li class="nav-item d-none" id="navMaintenance">
+                    <a class="nav-link" href="#" onclick="showPage('maintenance'); return false;">
+                        <i class="bi bi-gear"></i> Maintenance
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="/apidocs" target="_blank">
+                        <i class="bi bi-code-slash"></i> API
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <button class="btn nav-link" onclick="toggleTheme()">
+                        <i class="bi bi-moon-stars" id="themeIcon"></i>
+                    </button>
+                </li>
+                <li class="nav-item" id="navUser" style="display:none;">
+                    <span class="nav-link text-muted" id="navUserInfo"></span>
+                </li>
+            </ul>
+        </div>
+    </div>
+</nav>
+
+<!-- Status Messages -->
+<div id="statusArea" class="position-fixed top-0 end-0 p-3" style="z-index:1080; margin-top:60px;"></div>
+
+<!-- Documents Page -->
+<div id="page-documents" class="container-fluid mt-3">
+    <div class="row">
+        <!-- Tag sidebar -->
+        <div class="col-lg-2 col-md-3 mb-3">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-tags"></i> Tags</span>
+                </div>
+                <div class="list-group list-group-flush" id="tagSidebar">
+                    <a href="#" class="list-group-item list-group-item-action active" onclick="filterByTag(''); return false;">All Documents</a>
+                </div>
+            </div>
+        </div>
+        <!-- Document grid -->
+        <div class="col-lg-10 col-md-9">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <div id="resultsInfo" class="text-muted small"></div>
+                <div class="d-flex gap-2">
+                    <select class="form-select form-select-sm" id="sortSelect" style="width:auto;" onchange="loadDocuments()">
+                        <option value="upload_date:desc">Newest first</option>
+                        <option value="upload_date:asc">Oldest first</option>
+                        <option value="title:asc">Title A-Z</option>
+                        <option value="title:desc">Title Z-A</option>
+                        <option value="modified_date:desc">Recently modified</option>
+                    </select>
+                    <div class="btn-group btn-group-sm" role="group">
+                        <button type="button" class="btn btn-outline-secondary active" id="viewGrid" onclick="setView('grid')">
+                            <i class="bi bi-grid"></i>
+                        </button>
+                        <button type="button" class="btn btn-outline-secondary" id="viewList" onclick="setView('list')">
+                            <i class="bi bi-list-ul"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div id="documentContainer" class="row row-cols-1 row-cols-sm-2 row-cols-md-3 row-cols-xl-4 g-3"></div>
+            <div id="documentListContainer" class="d-none"></div>
+            <nav id="paginationNav" class="mt-3"><ul class="pagination justify-content-center"></ul></nav>
+        </div>
+    </div>
+</div>
+
+<!-- Tags Page -->
+<div id="page-tags" class="container mt-3 d-none">
+    <h4><i class="bi bi-tags"></i> Manage Tags</h4>
+    <div class="table-responsive mt-3">
+        <table class="table table-hover">
+            <thead><tr><th>Tag</th><th>Documents</th><th></th></tr></thead>
+            <tbody id="tagsTableBody"></tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Access Denied Overlay -->
+<div id="accessDenied" class="d-none">
+    <div class="d-flex align-items-center justify-content-center" style="min-height:80vh;">
+        <div class="text-center">
+            <i class="bi bi-shield-lock display-1 text-danger"></i>
+            <h2 class="mt-3">Access Denied</h2>
+            <p class="text-muted">Your Tailscale account is not in the allowed users list.<br>Contact an administrator to get access.</p>
+        </div>
+    </div>
+</div>
+
+<!-- Maintenance Page -->
+<div id="page-maintenance" class="container mt-3 d-none">
+    <h4><i class="bi bi-gear"></i> Maintenance</h4>
+    <ul class="nav nav-tabs mt-3" role="tablist">
+        <li class="nav-item">
+            <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-tailscale" type="button">Tailscale</button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-users" type="button">Users</button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-system" type="button">System</button>
+        </li>
+    </ul>
+    <div class="tab-content mt-3">
+        <!-- Tailscale Tab -->
+        <div class="tab-pane fade show active" id="tab-tailscale">
+            <div class="card">
+                <div class="card-body">
+                    <div id="tsLoading" class="text-center py-3"><span class="spinner-border spinner-border-sm"></span> Loading Tailscale status...</div>
+                    <!-- Disabled state -->
+                    <div id="tsDisabled" class="d-none">
+                        <p class="text-muted">Tailscale is not enabled. Enable it to allow secure access via your tailnet.</p>
+                        <div class="row g-2 align-items-end">
+                            <div class="col-auto">
+                                <label class="form-label fw-semibold">Hostname</label>
+                                <input type="text" class="form-control" id="tsHostnameInput" placeholder="e.g. docvault">
+                            </div>
+                            <div class="col-auto">
+                                <button class="btn btn-primary" onclick="enableTailscale()">
+                                    <i class="bi bi-power"></i> Enable Tailscale
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Needs auth state -->
+                    <div id="tsNeedsAuth" class="d-none">
+                        <div class="alert alert-warning">
+                            <i class="bi bi-hourglass-split"></i> <strong>Waiting for authentication...</strong>
+                            <p class="mb-1 mt-2">Open this link to authenticate with Tailscale:</p>
+                            <a id="tsLoginUrl" href="#" target="_blank" class="btn btn-sm btn-outline-primary">
+                                <i class="bi bi-box-arrow-up-right"></i> Open Tailscale Login
+                            </a>
+                        </div>
+                    </div>
+                    <!-- Running state -->
+                    <div id="tsRunning" class="d-none">
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <table class="table table-sm">
+                                    <tbody>
+                                        <tr><th style="width:120px;">Status</th><td><span class="badge bg-success">Connected</span></td></tr>
+                                        <tr><th>FQDN</th><td id="tsFqdn" class="font-monospace"></td></tr>
+                                        <tr><th>Tailscale IP</th><td id="tsIp" class="font-monospace"></td></tr>
+                                        <tr><th>Serve</th><td id="tsServeStatus"></td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <button class="btn btn-outline-danger btn-sm mt-2" onclick="disableTailscale()">
+                            <i class="bi bi-power"></i> Disable Tailscale
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- Users Tab -->
+        <div class="tab-pane fade" id="tab-users">
+            <div class="card">
+                <div class="card-body">
+                    <p class="text-muted mb-3">Manage which Tailscale users can access this application and their roles.</p>
+                    <div class="row g-2 mb-3 align-items-end">
+                        <div class="col-md-5">
+                            <label class="form-label fw-semibold">Tailscale Login (email)</label>
+                            <input type="email" class="form-control form-control-sm" id="addUserLogin" placeholder="alice@example.com">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label fw-semibold">Display Name</label>
+                            <input type="text" class="form-control form-control-sm" id="addUserDisplayName" placeholder="Optional">
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label fw-semibold">Role</label>
+                            <select class="form-select form-select-sm" id="addUserRole">
+                                <option value="user">User</option>
+                                <option value="admin">Admin</option>
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <button class="btn btn-primary btn-sm w-100" onclick="addUser()">
+                                <i class="bi bi-person-plus"></i> Add
+                            </button>
+                        </div>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-hover table-sm">
+                            <thead><tr><th>Login</th><th>Display Name</th><th>Role</th><th>Added</th><th></th></tr></thead>
+                            <tbody id="usersTableBody">
+                                <tr><td colspan="5" class="text-center text-muted">Loading...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- System Tab -->
+        <div class="tab-pane fade" id="tab-system">
+            <div class="card">
+                <div class="card-body">
+                    <table class="table table-sm">
+                        <tbody>
+                            <tr><th style="width:200px;">Documents</th><td id="sysDocCount">—</td></tr>
+                            <tr><th>Tags</th><td id="sysTagCount">—</td></tr>
+                            <tr><th>Allowed Users</th><td id="sysUserCount">—</td></tr>
+                            <tr><th>Database Size</th><td id="sysDbSize">—</td></tr>
+                            <tr><th>Upload Storage</th><td id="sysUploadSize">—</td></tr>
+                            <tr><th>Tailscale</th><td id="sysTailscale">—</td></tr>
+                        </tbody>
+                    </table>
+                    <button class="btn btn-outline-secondary btn-sm" onclick="loadSystemInfo()">
+                        <i class="bi bi-arrow-repeat"></i> Refresh
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Upload Modal -->
+<div class="modal fade" id="uploadModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-cloud-upload"></i> Upload Document</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <!-- Drop zone -->
+                <div id="dropZone" class="drop-zone mb-3">
+                    <i class="bi bi-cloud-arrow-up display-4"></i>
+                    <p class="mb-1">Drag & drop files here or click to browse</p>
+                    <p class="text-muted small">PDF, PNG, JPG, TIFF, BMP, WebP &bull; Max 50MB</p>
+                    <input type="file" id="fileInput" accept=".pdf,.png,.jpg,.jpeg,.gif,.tiff,.tif,.bmp,.webp,image/*" class="d-none" multiple>
+                    <!-- Mobile camera capture -->
+                    <button class="btn btn-sm btn-outline-secondary mt-2 d-md-none" onclick="document.getElementById('cameraInput').click()">
+                        <i class="bi bi-camera"></i> Take Photo
+                    </button>
+                    <input type="file" id="cameraInput" accept="image/*" capture="environment" class="d-none">
+                </div>
+                <!-- Upload queue -->
+                <div id="uploadQueue" class="d-none">
+                    <h6>Upload Queue</h6>
+                    <div id="uploadItems"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Document Detail Modal -->
+<div class="modal fade" id="docDetailModal" tabindex="-1">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="docDetailTitle"></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row">
+                    <div class="col-md-5 text-center mb-3">
+                        <img id="docDetailThumb" class="img-fluid rounded border" style="max-height:400px;" alt="thumbnail">
+                        <div class="mt-2">
+                            <a id="docDetailDownload" href="#" class="btn btn-sm btn-primary">
+                                <i class="bi bi-download"></i> Download
+                            </a>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="reocrDocument()">
+                                <i class="bi bi-arrow-repeat"></i> Re-OCR
+                            </button>
+                            <button class="btn btn-sm btn-outline-danger" onclick="deleteCurrentDocument()">
+                                <i class="bi bi-trash"></i> Delete
+                            </button>
+                        </div>
+                    </div>
+                    <div class="col-md-7">
+                        <div id="docDetailView">
+                            <table class="table table-sm">
+                                <tbody>
+                                    <tr><th style="width:120px;">Title</th><td id="docFieldTitle"></td></tr>
+                                    <tr><th>Filename</th><td id="docFieldFilename"></td></tr>
+                                    <tr><th>Type</th><td id="docFieldType"></td></tr>
+                                    <tr><th>Size</th><td id="docFieldSize"></td></tr>
+                                    <tr><th>Uploaded</th><td id="docFieldDate"></td></tr>
+                                    <tr><th>Modified</th><td id="docFieldModified"></td></tr>
+                                    <tr><th>Tags</th><td id="docFieldTags"></td></tr>
+                                    <tr><th>Notes</th><td id="docFieldNotes"></td></tr>
+                                </tbody>
+                            </table>
+                            <button class="btn btn-sm btn-outline-primary" onclick="startEditDocument()">
+                                <i class="bi bi-pencil"></i> Edit
+                            </button>
+                        </div>
+                        <div id="docDetailEdit" class="d-none">
+                            <div class="mb-2">
+                                <label class="form-label fw-semibold">Title</label>
+                                <input type="text" class="form-control form-control-sm" id="editTitle">
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label fw-semibold">Tags (comma-separated)</label>
+                                <input type="text" class="form-control form-control-sm" id="editTags">
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label fw-semibold">Notes</label>
+                                <textarea class="form-control form-control-sm" id="editNotes" rows="3"></textarea>
+                            </div>
+                            <button class="btn btn-sm btn-primary" onclick="saveEditDocument()">Save</button>
+                            <button class="btn btn-sm btn-secondary" onclick="cancelEditDocument()">Cancel</button>
+                        </div>
+                        <hr>
+                        <div class="d-flex justify-content-between align-items-center">
+                            <h6 class="mb-0">OCR Text</h6>
+                            <div id="docOcrStatus"></div>
+                        </div>
+                        <div id="docOcrText" class="ocr-text-box mt-2 p-2 bg-body-secondary rounded" style="max-height:300px; overflow-y:auto; white-space:pre-wrap; font-size:0.85rem;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div class="modal fade" id="deleteConfirmModal" tabindex="-1">
+    <div class="modal-dialog modal-sm">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Confirm Delete</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">Are you sure you want to delete this document? This cannot be undone.</div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger btn-sm" id="confirmDeleteBtn">Delete</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
