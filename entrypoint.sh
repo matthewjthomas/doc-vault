@@ -20,22 +20,36 @@ if [ -f "$STATE_FILE" ]; then
         TS_HOSTNAME=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='tailscale_hostname';" 2>/dev/null || echo "")
 
         if [ "$TS_ENABLED" = "true" ] && [ -n "$TS_HOSTNAME" ]; then
-            # Run tailscale up + serve setup in the background so Flask starts immediately
-            (
-                echo "Reconnecting Tailscale as ${TS_HOSTNAME}..."
-                timeout 15 tailscale up --hostname="$TS_HOSTNAME" 2>/dev/null || true
+            # Check current state before trying to reconnect
+            TS_STATE=$(tailscale status --json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('BackendState',''))" 2>/dev/null || echo "")
 
-                # Check if connected before starting serve
-                TS_STATE=$(tailscale status --json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('BackendState',''))" 2>/dev/null || echo "")
-                if [ "$TS_STATE" = "Running" ]; then
-                    echo "Starting Tailscale Serve..."
-                    tailscale serve reset 2>/dev/null || true
-                    tailscale serve --bg 5000 2>/dev/null || true
-                    echo "Tailscale Serve active"
-                else
-                    echo "Tailscale not connected (state: ${TS_STATE}). Use Maintenance page to authenticate."
-                fi
-            ) &
+            if [ "$TS_STATE" = "Running" ]; then
+                # Already connected — just start serve
+                echo "Tailscale already connected."
+                tailscale serve reset 2>/dev/null || true
+                tailscale serve --bg 5000 2>/dev/null || true
+                echo "Tailscale Serve active"
+            elif [ "$TS_STATE" = "NeedsLogin" ]; then
+                # Needs auth — don't run tailscale up (it would regen keys).
+                # User will authenticate from the Maintenance page.
+                echo "Tailscale needs authentication. Use Maintenance page to log in."
+            else
+                # Try to reconnect in background (already authed, just needs 'up')
+                (
+                    echo "Reconnecting Tailscale as ${TS_HOSTNAME}..."
+                    timeout 10 tailscale up --hostname="$TS_HOSTNAME" 2>/dev/null || true
+
+                    TS_STATE=$(tailscale status --json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('BackendState',''))" 2>/dev/null || echo "")
+                    if [ "$TS_STATE" = "Running" ]; then
+                        echo "Starting Tailscale Serve..."
+                        tailscale serve reset 2>/dev/null || true
+                        tailscale serve --bg 5000 2>/dev/null || true
+                        echo "Tailscale Serve active"
+                    else
+                        echo "Tailscale not connected (state: ${TS_STATE}). Use Maintenance page."
+                    fi
+                ) &
+            fi
         fi
     fi
 fi

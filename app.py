@@ -1184,7 +1184,6 @@ def admin_tailscale_enable():
     set_setting('tailscale_enabled', 'true')
 
     import time
-    import selectors
 
     # Ensure tailscaled is running
     try:
@@ -1198,63 +1197,39 @@ def admin_tailscale_enable():
         )
         time.sleep(2)  # Give tailscaled time to start
 
-    # Run tailscale up as a background process — it blocks until login completes,
-    # so we read early output for the login URL and let it continue in the background.
-    proc = subprocess.Popen(
-        ['tailscale', 'up', f'--hostname={hostname}'],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-    )
-
-    # Give it a few seconds to produce a login URL or finish (already authed)
-    try:
-        stdout, stderr = proc.communicate(timeout=5)
-        # Process exited within 5s — already authenticated
+    # Check if already connected (e.g. re-enabling after disable)
+    status = _tailscale_status()
+    if status and status.get('BackendState') == 'Running':
         _start_tailscale_serve()
         return jsonify({'status': 'running'})
-    except subprocess.TimeoutExpired:
-        pass
 
-    # Process is still running — read whatever output is available for the login URL
-    # The login URL is typically written to stderr
+    # Use 'tailscale login' — it initiates the auth flow and exits immediately
+    # with the login URL, unlike 'tailscale up' which blocks until auth completes.
+    result = subprocess.run(
+        ['tailscale', 'login', f'--hostname={hostname}'],
+        capture_output=True, text=True, timeout=15
+    )
+
+    # Parse login URL from output (written to stderr)
     login_url = ''
-    sel = selectors.DefaultSelector()
-    sel.register(proc.stdout, selectors.EVENT_READ)
-    sel.register(proc.stderr, selectors.EVENT_READ)
-    collected = ''
-    deadline = time.time() + 3
-    while time.time() < deadline:
-        for key, _ in sel.select(timeout=0.5):
-            data = key.fileobj.readline()
-            if data:
-                collected += data
-    sel.close()
-
-    for line in collected.split('\n'):
+    for line in (result.stdout + result.stderr).split('\n'):
         line = line.strip()
         if line.startswith('https://'):
             login_url = line
             break
 
-    if login_url:
-        # Let tailscale up continue in the background — it will complete once user logs in
-        return jsonify({'status': 'needs_auth', 'login_url': login_url})
+    # If not in output, check status for the AuthURL
+    if not login_url:
+        time.sleep(1)
+        status = _tailscale_status()
+        if status:
+            if status.get('BackendState') == 'Running':
+                _start_tailscale_serve()
+                return jsonify({'status': 'running'})
+            login_url = status.get('AuthURL', '')
 
-    # No URL found but process still running — check status directly
-    try:
-        status = subprocess.run(
-            ['tailscale', 'status', '--json'],
-            capture_output=True, text=True, timeout=5
-        )
-        ts_status = json.loads(status.stdout)
-        if ts_status.get('BackendState') == 'Running':
-            _start_tailscale_serve()
-            return jsonify({'status': 'running'})
-        elif ts_status.get('BackendState') == 'NeedsLogin':
-            auth_url = ts_status.get('AuthURL', '')
-            if auth_url:
-                return jsonify({'status': 'needs_auth', 'login_url': auth_url})
-    except Exception:
-        pass
+    if login_url:
+        return jsonify({'status': 'needs_auth', 'login_url': login_url})
 
     return jsonify({'status': 'starting', 'message': 'Tailscale is starting, check status in a moment'})
 
@@ -1285,34 +1260,6 @@ def admin_tailscale_start_serve():
 
     _start_tailscale_serve()
     return jsonify({'status': 'serve_started'})
-
-
-@app.route('/api/admin/tailscale/reconnect', methods=['POST'])
-@require_admin
-def admin_tailscale_reconnect():
-    """Re-run tailscale up to complete login after web auth
-    ---
-    responses:
-      200:
-        description: Reconnect result
-    """
-    hostname = get_setting('tailscale_hostname', '')
-    if not hostname:
-        return jsonify({'error': 'No hostname configured'}), 400
-
-    try:
-        result = subprocess.run(
-            ['tailscale', 'up', f'--hostname={hostname}'],
-            capture_output=True, text=True, timeout=10
-        )
-        # Check new state
-        status = _tailscale_status()
-        if status and status.get('BackendState') == 'Running':
-            _start_tailscale_serve()
-            return jsonify({'status': 'running'})
-        return jsonify({'status': status.get('BackendState', 'unknown') if status else 'unknown'})
-    except subprocess.TimeoutExpired:
-        return jsonify({'status': 'timeout', 'message': 'Still waiting for auth'})
 
 
 @app.route('/api/admin/tailscale/disable', methods=['POST'])
