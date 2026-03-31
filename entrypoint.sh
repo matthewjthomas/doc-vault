@@ -21,7 +21,8 @@ if [ -f "$STATE_FILE" ]; then
 
         if [ "$TS_ENABLED" = "true" ] && [ -n "$TS_HOSTNAME" ]; then
             echo "Reconnecting Tailscale as ${TS_HOSTNAME}..."
-            tailscale up --hostname="$TS_HOSTNAME" 2>/dev/null || true
+            # Run with timeout to avoid blocking if auth is needed
+            timeout 10 tailscale up --hostname="$TS_HOSTNAME" 2>/dev/null || true
             sleep 2
 
             # Check if connected before starting serve
