@@ -1203,23 +1203,16 @@ def admin_tailscale_enable():
         _start_tailscale_serve()
         return jsonify({'status': 'running'})
 
-    # Use 'tailscale login' — it initiates the auth flow and exits immediately
-    # with the login URL, unlike 'tailscale up' which blocks until auth completes.
-    result = subprocess.run(
+    # Run 'tailscale login' in the background — it blocks until auth completes,
+    # but we only need it to register with the control server and generate an AuthURL.
+    subprocess.Popen(
         ['tailscale', 'login', f'--hostname={hostname}'],
-        capture_output=True, text=True, timeout=15
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
 
-    # Parse login URL from output (written to stderr)
+    # Poll tailscale status for the AuthURL (appears within a few seconds)
     login_url = ''
-    for line in (result.stdout + result.stderr).split('\n'):
-        line = line.strip()
-        if line.startswith('https://'):
-            login_url = line
-            break
-
-    # If not in output, check status for the AuthURL
-    if not login_url:
+    for _ in range(10):
         time.sleep(1)
         status = _tailscale_status()
         if status:
@@ -1227,6 +1220,8 @@ def admin_tailscale_enable():
                 _start_tailscale_serve()
                 return jsonify({'status': 'running'})
             login_url = status.get('AuthURL', '')
+            if login_url:
+                break
 
     if login_url:
         return jsonify({'status': 'needs_auth', 'login_url': login_url})
