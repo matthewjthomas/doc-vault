@@ -21,11 +21,49 @@ A self-hosted document management web app with OCR, tagging, and full-text searc
 
 - Docker and Docker Compose
 
-### Run
+### Run from source
 
 ```bash
 git clone https://github.com/matthewjthomas/doc-vault.git
 cd doc-vault
+docker compose up -d
+```
+
+### Run from GHCR
+
+Pull the pre-built image:
+
+```bash
+docker pull ghcr.io/matthewjthomas/doc-vault:latest
+```
+
+Or use it directly in a `docker-compose.yml`:
+
+```yaml
+services:
+  docvault:
+    image: ghcr.io/matthewjthomas/doc-vault:latest
+    container_name: docvault
+    ports:
+      - "5050:5000"
+    volumes:
+      - ./data:/app/data
+      - ./uploads:/app/uploads
+    environment:
+      - SECRET_KEY=change-me-to-something-secret
+      - MAX_UPLOAD_MB=50
+      # - AUTH_BYPASS=true
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    restart: unless-stopped
+```
+
+Then run:
+
+```bash
 docker compose up -d
 ```
 
