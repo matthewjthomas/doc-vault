@@ -287,7 +287,7 @@ def get_current_user():
     """Determine the current user from Tailscale headers or env-var bypass.
 
     Tailscale Serve proxies from 127.0.0.1 and injects identity headers.
-    It also strips those headers from incoming requests to prevent spoofing.
+    For direct Tailscale IP access, we use the tailscale whois API.
     If AUTH_BYPASS=true is set, all requests get full admin access (dev mode).
     """
     # Environment variable bypass for development
@@ -303,21 +303,41 @@ def get_current_user():
     ts_login = request.headers.get('Tailscale-User-Login', '')
     ts_name = request.headers.get('Tailscale-User-Name', '')
 
+    # If Tailscale Serve proxy (127.0.0.1 with headers), use headers directly
     if remote_addr == '127.0.0.1' and ts_login:
-        # Request came from Tailscale Serve — check allowed_users
-        db = get_db()
-        row = db.execute("SELECT * FROM allowed_users WHERE login = ?", (ts_login,)).fetchone()
-        if not row:
-            return None  # User not allowed
-        return {
-            'login': row['login'],
-            'display_name': ts_name or row['display_name'] or row['login'],
-            'role': row['role'],
-            'auth_method': 'tailscale',
-        }
+        pass  # ts_login and ts_name already set
+    elif remote_addr.startswith('100.') or remote_addr.startswith('fd7a:'):
+        # Direct Tailscale IP access — use whois to identify the caller
+        try:
+            result = subprocess.run(
+                ['tailscale', 'whois', '--json', remote_addr],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                whois = json.loads(result.stdout)
+                user_profile = whois.get('UserProfile', {})
+                ts_login = user_profile.get('LoginName', '')
+                ts_name = user_profile.get('DisplayName', ts_login)
+        except Exception:
+            pass
+    else:
+        # Not from Tailscale — deny
+        return None
 
-    # No Tailscale headers and no bypass — deny access
-    return None
+    if not ts_login:
+        return None
+
+    # Check allowed_users
+    db = get_db()
+    row = db.execute("SELECT * FROM allowed_users WHERE login = ?", (ts_login,)).fetchone()
+    if not row:
+        return None  # User not allowed
+    return {
+        'login': row['login'],
+        'display_name': ts_name or row['display_name'] or row['login'],
+        'role': row['role'],
+        'auth_method': 'tailscale',
+    }
 
 
 def require_auth(f):
