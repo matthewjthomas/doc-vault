@@ -171,6 +171,7 @@ async function enableTailscale() {
 
 function startTsPolling() {
     stopTsPolling();
+    let reconnectAttempted = false;
     tsPollingInterval = setInterval(async () => {
         try {
             const data = await api('/api/admin/tailscale/status');
@@ -182,6 +183,21 @@ function startTsPolling() {
                 } catch { /* ignore */ }
                 showStatus('Tailscale connected!', 'success');
                 loadTailscaleStatus();
+            } else if (data.backend_state === 'NeedsLogin' && !reconnectAttempted) {
+                // Auth may have completed on the web but tailscale up was killed.
+                // Nudge the daemon by re-running tailscale up.
+                reconnectAttempted = true;
+                try {
+                    const rc = await api('/api/admin/tailscale/reconnect', { method: 'POST' });
+                    if (rc.status === 'running') {
+                        stopTsPolling();
+                        showStatus('Tailscale connected!', 'success');
+                        loadTailscaleStatus();
+                    } else {
+                        // Reset so we try again on next poll cycle
+                        setTimeout(() => { reconnectAttempted = false; }, 10000);
+                    }
+                } catch { /* ignore, will retry */ }
             }
         } catch {
             // keep polling

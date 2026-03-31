@@ -1287,6 +1287,34 @@ def admin_tailscale_start_serve():
     return jsonify({'status': 'serve_started'})
 
 
+@app.route('/api/admin/tailscale/reconnect', methods=['POST'])
+@require_admin
+def admin_tailscale_reconnect():
+    """Re-run tailscale up to complete login after web auth
+    ---
+    responses:
+      200:
+        description: Reconnect result
+    """
+    hostname = get_setting('tailscale_hostname', '')
+    if not hostname:
+        return jsonify({'error': 'No hostname configured'}), 400
+
+    try:
+        result = subprocess.run(
+            ['tailscale', 'up', f'--hostname={hostname}'],
+            capture_output=True, text=True, timeout=10
+        )
+        # Check new state
+        status = _tailscale_status()
+        if status and status.get('BackendState') == 'Running':
+            _start_tailscale_serve()
+            return jsonify({'status': 'running'})
+        return jsonify({'status': status.get('BackendState', 'unknown') if status else 'unknown'})
+    except subprocess.TimeoutExpired:
+        return jsonify({'status': 'timeout', 'message': 'Still waiting for auth'})
+
+
 @app.route('/api/admin/tailscale/disable', methods=['POST'])
 @require_admin
 def admin_tailscale_disable():
