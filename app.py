@@ -1152,6 +1152,7 @@ def admin_tailscale_status():
         'fqdn': dns_name,
         'tailscale_ip': tailscale_ips[0] if tailscale_ips else '',
         'serve_active': serve_status is not None and bool(serve_status),
+        'auth_url': status.get('AuthURL', ''),
     })
 
 

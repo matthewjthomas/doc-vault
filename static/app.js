@@ -120,6 +120,12 @@ async function loadTailscaleStatus() {
             stopTsPolling();
         } else if (data.backend_state === 'NeedsLogin') {
             needsAuth.classList.remove('d-none');
+            if (data.auth_url) {
+                const link = document.getElementById('tsLoginUrl');
+                link.href = data.auth_url;
+                link.textContent = 'Open Tailscale Login';
+            }
+            startTsPolling();
         } else {
             disabled.classList.remove('d-none');
             if (data.hostname) {
