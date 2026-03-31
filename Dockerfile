@@ -10,6 +10,7 @@ RUN apt-get update && \
         libgl1 \
         curl \
         gnupg \
+        procps \
         sqlite3 \
     && curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.noarmor.gpg | \
        tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null \
