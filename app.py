@@ -1197,16 +1197,21 @@ def admin_tailscale_enable():
         )
         time.sleep(2)  # Give tailscaled time to start
 
+    # Kill any orphaned tailscale CLI processes to avoid key conflicts
+    subprocess.run(['pkill', '-f', 'tailscale (up|login)'], capture_output=True)
+    time.sleep(0.5)
+
     # Check if already connected (e.g. re-enabling after disable)
     status = _tailscale_status()
     if status and status.get('BackendState') == 'Running':
         _start_tailscale_serve()
         return jsonify({'status': 'running'})
 
-    # Run 'tailscale login' in the background — it blocks until auth completes,
-    # but we only need it to register with the control server and generate an AuthURL.
+    # Run 'tailscale up' in the background. It blocks until auth completes,
+    # which is what we want — it keeps WantRunning=true and finalizes the
+    # connection once the user authenticates via the web URL.
     subprocess.Popen(
-        ['tailscale', 'login', f'--hostname={hostname}'],
+        ['tailscale', 'up', f'--hostname={hostname}'],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
 
