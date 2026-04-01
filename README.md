@@ -111,6 +111,66 @@ The app is now accessible at `https://<hostname>.<your-tailnet>.ts.net` with Tai
 
 Tailscale runs in **userspace networking mode** (`--tun=userspace-networking`), so no special Docker capabilities (`NET_ADMIN`, `NET_RAW`) or `/dev/net/tun` device access are needed. All tailnet traffic is proxied through Tailscale Serve rather than a kernel TUN device.
 
+## Share Watch
+
+DocVault can watch a network share for new files and automatically import them for review. This is useful for connecting a scanner that saves files to a shared folder. Configure the share from **Maintenance → Share Watch**.
+
+The watcher polls the share at a configurable interval, imports any new files, runs OCR, and flags them as **pending review**. Imported files appear under the **Pending** nav item where you can approve or delete them.
+
+### SMB Share
+
+Enter the SMB path directly in the Share Watch settings:
+
+```
+//server/share/scans
+```
+
+Provide the username and password for the share if required.
+
+### NFS Share
+
+DocVault's Share Watch uses the SMB protocol natively, but you can use an NFS share (or any other network filesystem) by mounting it into the Docker container as a local volume and then pointing Share Watch at a local SMB path — or more simply, by bind-mounting the NFS share and using the built-in file import.
+
+The easiest approach is to mount the NFS share on the Docker host and bind-mount it into the container:
+
+1. **Mount the NFS share on the host:**
+
+   ```bash
+   sudo mkdir -p /mnt/scanner
+   sudo mount -t nfs nas.local:/volume1/scans /mnt/scanner
+   ```
+
+   To persist across reboots, add to `/etc/fstab`:
+
+   ```
+   nas.local:/volume1/scans /mnt/scanner nfs defaults 0 0
+   ```
+
+2. **Add the mount to `docker-compose.yml`:**
+
+   ```yaml
+   services:
+     docvault:
+       image: ghcr.io/matthewjthomas/doc-vault:latest
+       volumes:
+         - ./data:/app/data
+         - ./uploads:/app/uploads
+         - /mnt/scanner:/app/scanner   # NFS share mounted on host
+       environment:
+         - SECRET_KEY=change-me-to-something-secret
+   ```
+
+3. **Set up Share Watch** to point at a local Samba share that exposes `/app/scanner`, or install a lightweight SMB server on the host. Alternatively, you can write a simple cron job or script on the host that moves files from the NFS mount into DocVault via the upload API:
+
+   ```bash
+   for f in /mnt/scanner/*; do
+     curl -s -X POST http://localhost:5050/api/documents \
+       -F "file=@$f" && rm "$f"
+   done
+   ```
+
+This approach works with any network filesystem (NFS, CIFS, SSHFS, etc.) — just mount it on the host and either use the upload API or expose it as an SMB share for the watcher.
+
 ## Authentication Model
 
 | Access Method | Behavior |
