@@ -302,9 +302,23 @@
             </div>
             <div class="modal-body">
                 <div class="row">
+                    <!-- Document Viewer (hidden by default) -->
+                    <div id="docViewer" class="d-none mb-3">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="fw-semibold">Document Preview</span>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="closeDocViewer()">
+                                <i class="bi bi-x-lg"></i> Close Preview
+                            </button>
+                        </div>
+                        <div id="docViewerContent" class="border rounded bg-body-secondary" style="width:100%; min-height:600px;"></div>
+                    </div>
+                    <div id="docDetailColumns" class="row">
                     <div class="col-md-5 text-center mb-3">
-                        <img id="docDetailThumb" class="img-fluid rounded border" style="max-height:400px;" alt="thumbnail">
+                        <img id="docDetailThumb" class="img-fluid rounded border" style="max-height:400px; cursor:pointer;" alt="thumbnail" onclick="openDocViewer()" title="Click to preview">
                         <div class="mt-2">
+                            <button class="btn btn-sm btn-outline-primary" onclick="openDocViewer()">
+                                <i class="bi bi-eye"></i> View
+                            </button>
                             <a id="docDetailDownload" href="#" class="btn btn-sm btn-primary">
                                 <i class="bi bi-download"></i> Download
                             </a>
@@ -357,7 +371,7 @@
                         </div>
                         <div id="docOcrText" class="ocr-text-box mt-2 p-2 bg-body-secondary rounded" style="max-height:300px; overflow-y:auto; white-space:pre-wrap; font-size:0.85rem;"></div>
                     </div>
-                </div>
+                    </div><!-- end docDetailColumns -->
             </div>
         </div>
     </div>

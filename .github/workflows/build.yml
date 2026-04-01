@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths-ignore:
       - 'README.md'
+  schedule:
+    - cron: '0 6 * * 1'  # Every Monday at 6:00 UTC
 
 env:
   REGISTRY: ghcr.io
@@ -60,5 +62,5 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
+          cache-from: ${{ github.event_name != 'schedule' && 'type=gha' || '' }}
           cache-to: type=gha,mode=max

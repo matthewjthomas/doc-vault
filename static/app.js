@@ -675,6 +675,7 @@ async function uploadFile(itemId) {
 function pollOcrStatus(docId, itemId) {
     const statusEl = document.getElementById(`${itemId}-status`);
     const progressBar = document.querySelector(`#${itemId}-progress .progress-bar`);
+    const btn = document.getElementById(`${itemId}-btn`);
 
     const interval = setInterval(async () => {
         try {
@@ -689,12 +690,14 @@ function pollOcrStatus(docId, itemId) {
                     progressBar.classList.add('bg-success');
                 }
                 if (statusEl) statusEl.textContent = 'Done!';
+                if (btn) { btn.innerHTML = '<i class="bi bi-check-lg"></i>'; btn.classList.replace('btn-primary', 'btn-success'); }
                 loadDocuments();
                 loadTags();
             } else if (data.status === 'error') {
                 clearInterval(interval);
                 if (progressBar) progressBar.classList.add('bg-danger');
                 if (statusEl) { statusEl.textContent = data.message; statusEl.classList.add('text-danger'); }
+                if (btn) { btn.innerHTML = '<i class="bi bi-x-lg"></i>'; btn.classList.replace('btn-primary', 'btn-danger'); }
                 loadDocuments();
             }
         } catch {
@@ -731,6 +734,13 @@ function renderDocumentDetail(doc) {
     document.getElementById('docDetailTitle').textContent = doc.title;
     document.getElementById('docDetailThumb').src = `/api/documents/${doc.id}/thumbnail`;
     document.getElementById('docDetailDownload').href = `/api/documents/${doc.id}/file`;
+
+    // Store file type and ID for the viewer
+    document.getElementById('docViewer')._docId = doc.id;
+    document.getElementById('docViewer')._fileType = doc.file_type;
+
+    // Reset viewer state
+    closeDocViewer();
 
     document.getElementById('docFieldTitle').textContent = doc.title;
     document.getElementById('docFieldFilename').textContent = doc.original_filename;
@@ -782,6 +792,33 @@ function startDetailPolling(docId) {
 // ---------------------------------------------------------------------------
 // Document edit
 // ---------------------------------------------------------------------------
+function openDocViewer() {
+    const viewer = document.getElementById('docViewer');
+    const content = document.getElementById('docViewerContent');
+    const columns = document.getElementById('docDetailColumns');
+    const docId = viewer._docId;
+    const fileType = viewer._fileType;
+    const fileUrl = `/api/documents/${docId}/file`;
+
+    if (fileType === 'pdf') {
+        content.innerHTML = `<iframe src="${fileUrl}" style="width:100%; height:80vh; border:none;"></iframe>`;
+    } else {
+        content.innerHTML = `<img src="${fileUrl}" style="max-width:100%; max-height:80vh;" class="d-block mx-auto">`;
+    }
+
+    viewer.classList.remove('d-none');
+    columns.classList.add('d-none');
+}
+
+function closeDocViewer() {
+    const viewer = document.getElementById('docViewer');
+    const content = document.getElementById('docViewerContent');
+    const columns = document.getElementById('docDetailColumns');
+    content.innerHTML = '';
+    viewer.classList.add('d-none');
+    columns.classList.remove('d-none');
+}
+
 function startEditDocument() {
     const doc = {
         title: document.getElementById('docFieldTitle').textContent,
