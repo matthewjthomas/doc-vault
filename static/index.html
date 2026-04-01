@@ -36,6 +36,11 @@
                     </a>
                 </li>
                 <li class="nav-item">
+                    <a class="nav-link" href="#" onclick="showPendingDocuments(); return false;">
+                        <i class="bi bi-hourglass-split"></i> Pending <span class="badge bg-warning text-dark d-none" id="pendingBadge">0</span>
+                    </a>
+                </li>
+                <li class="nav-item">
                     <a class="nav-link" href="#" onclick="showPage('tags'); return false;">
                         <i class="bi bi-tags"></i> Tags
                     </a>
@@ -147,6 +152,11 @@
         <li class="nav-item">
             <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-trash" type="button">
                 <i class="bi bi-trash3"></i> Trash
+            </button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-smb" type="button">
+                <i class="bi bi-folder-symlink"></i> SMB Watch
             </button>
         </li>
     </ul>
@@ -290,6 +300,51 @@
                 </div>
             </div>
         </div>
+        <!-- SMB Watch Tab -->
+        <div class="tab-pane fade" id="tab-smb">
+            <div class="card">
+                <div class="card-body">
+                    <p class="text-muted mb-3">Watch an SMB network share for new files and automatically import them for review.</p>
+                    <div class="row g-3">
+                        <div class="col-12">
+                            <label class="form-label fw-semibold">SMB Path</label>
+                            <input type="text" class="form-control" id="smbPath" placeholder="//server/share/folder">
+                            <div class="form-text">e.g. //nas/scans or \\192.168.1.100\Scans</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">Username</label>
+                            <input type="text" class="form-control" id="smbUsername" placeholder="username">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">Password</label>
+                            <input type="password" class="form-control" id="smbPassword" placeholder="password">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-semibold">Poll Interval (seconds)</label>
+                            <input type="number" class="form-control" id="smbPollInterval" value="60" min="10">
+                        </div>
+                        <div class="col-md-4 d-flex align-items-end">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="smbEnabled">
+                                <label class="form-check-label" for="smbEnabled">Enable Watcher</label>
+                            </div>
+                        </div>
+                        <div class="col-md-4 d-flex align-items-end">
+                            <span id="smbWatcherStatus"></span>
+                        </div>
+                        <div class="col-12">
+                            <button class="btn btn-outline-secondary btn-sm me-1" onclick="testSmbConnection()">
+                                <i class="bi bi-plug"></i> Test Connection
+                            </button>
+                            <button class="btn btn-primary btn-sm" onclick="saveSmbSettings()">
+                                <i class="bi bi-check-lg"></i> Save Settings
+                            </button>
+                        </div>
+                        <div id="smbTestResult" class="col-12 d-none"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -381,6 +436,9 @@
                             </table>
                             <button class="btn btn-sm btn-outline-primary" onclick="startEditDocument()">
                                 <i class="bi bi-pencil"></i> Edit
+                            </button>
+                            <button class="btn btn-sm btn-success d-none" id="approveDocBtn" onclick="approveCurrentDocument()">
+                                <i class="bi bi-check-circle"></i> Approve
                             </button>
                         </div>
                         <div id="docDetailEdit" class="d-none">

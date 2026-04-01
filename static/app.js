@@ -52,6 +52,7 @@ function showPage(page) {
         loadUsers();
         loadSystemInfo();
         loadTrash();
+        loadSmbSettings();
     }
 }
 
@@ -86,6 +87,7 @@ async function checkAuth() {
         // Load main content
         loadDocuments();
         loadTags();
+        loadPendingCount();
     } catch (err) {
         // On network error, still load app (localhost fallback)
         loadDocuments();
@@ -381,6 +383,115 @@ async function emptyTrash() {
 }
 
 // ---------------------------------------------------------------------------
+// SMB Watch
+// ---------------------------------------------------------------------------
+async function loadSmbSettings() {
+    try {
+        const data = await api('/api/admin/smb');
+        document.getElementById('smbPath').value = data.smb_path;
+        document.getElementById('smbUsername').value = data.smb_username;
+        document.getElementById('smbPassword').value = '';
+        document.getElementById('smbPassword').placeholder = data.smb_password_set ? '••••••••' : 'password';
+        document.getElementById('smbPollInterval').value = data.smb_poll_interval;
+        document.getElementById('smbEnabled').checked = data.smb_enabled;
+        const statusEl = document.getElementById('smbWatcherStatus');
+        statusEl.innerHTML = data.smb_watcher_running
+            ? '<span class="badge bg-success"><i class="bi bi-activity"></i> Watcher running</span>'
+            : '<span class="badge bg-secondary">Watcher stopped</span>';
+    } catch (err) { /* silent */ }
+}
+
+async function saveSmbSettings() {
+    const payload = {
+        smb_path: document.getElementById('smbPath').value.trim(),
+        smb_username: document.getElementById('smbUsername').value.trim(),
+        smb_poll_interval: parseInt(document.getElementById('smbPollInterval').value) || 60,
+        smb_enabled: document.getElementById('smbEnabled').checked,
+    };
+    const password = document.getElementById('smbPassword').value;
+    if (password) payload.smb_password = password;
+
+    try {
+        await api('/api/admin/smb', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        showStatus('SMB settings saved');
+        loadSmbSettings();
+    } catch (err) {
+        showStatus(err.message, 'danger');
+    }
+}
+
+async function testSmbConnection() {
+    const resultEl = document.getElementById('smbTestResult');
+    resultEl.className = 'col-12';
+    resultEl.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Testing connection...';
+
+    const payload = {
+        smb_path: document.getElementById('smbPath').value.trim(),
+        smb_username: document.getElementById('smbUsername').value.trim(),
+        smb_password: document.getElementById('smbPassword').value,
+    };
+
+    try {
+        const data = await api('/api/admin/smb/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        resultEl.innerHTML = `<div class="alert alert-success py-2 mb-0"><i class="bi bi-check-circle"></i> ${escapeHtml(data.message)}</div>`;
+    } catch (err) {
+        resultEl.innerHTML = `<div class="alert alert-danger py-2 mb-0"><i class="bi bi-x-circle"></i> ${escapeHtml(err.message)}</div>`;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pending Review
+// ---------------------------------------------------------------------------
+let pendingFilter = false;
+
+async function loadPendingCount() {
+    try {
+        const data = await api('/api/documents/pending');
+        const badge = document.getElementById('pendingBadge');
+        if (data.total > 0) {
+            badge.textContent = data.total;
+            badge.classList.remove('d-none');
+        } else {
+            badge.classList.add('d-none');
+        }
+    } catch (err) { /* silent */ }
+}
+
+function showPendingDocuments() {
+    pendingFilter = true;
+    currentPage = 1;
+    currentTag = '';
+    currentQuery = '';
+    showPage('documents');
+}
+
+function clearPendingFilter() {
+    pendingFilter = false;
+    currentPage = 1;
+    loadDocuments();
+}
+
+async function approveCurrentDocument() {
+    try {
+        const doc = await api(`/api/documents/${currentDocId}/approve`, { method: 'POST' });
+        renderDocumentDetail(doc);
+        showStatus('Document approved');
+        loadDocuments();
+        loadPendingCount();
+    } catch (err) {
+        showStatus(err.message, 'danger');
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Status messages
 // ---------------------------------------------------------------------------
 function showStatus(msg, type = 'success') {
@@ -441,15 +552,18 @@ async function loadDocuments() {
     });
     if (currentTag) params.set('tag', currentTag);
     if (currentQuery) params.set('q', currentQuery);
+    if (pendingFilter) params.set('pending', 'true');
 
     try {
         const data = await api(`/api/documents?${params}`);
         renderDocuments(data);
         renderPagination(data);
-        document.getElementById('resultsInfo').textContent =
-            `${data.total} document${data.total !== 1 ? 's' : ''}` +
-            (currentQuery ? ` matching "${currentQuery}"` : '') +
-            (currentTag ? ` tagged "${currentTag}"` : '');
+        let infoText = `${data.total} document${data.total !== 1 ? 's' : ''}`;
+        if (pendingFilter) infoText += ' pending review';
+        if (currentQuery) infoText += ` matching "${currentQuery}"`;
+        if (currentTag) infoText += ` tagged "${currentTag}"`;
+        document.getElementById('resultsInfo').innerHTML = infoText +
+            (pendingFilter ? ' <button class="btn btn-sm btn-outline-secondary ms-2" onclick="clearPendingFilter()"><i class="bi bi-x"></i> Show all</button>' : '');
     } catch (err) {
         showStatus(err.message, 'danger');
     }
@@ -477,6 +591,7 @@ function renderDocuments(data) {
                 <div class="card-body p-2">
                     <h6 class="card-title mb-1 text-truncate" title="${escapeHtml(doc.title)}">${escapeHtml(doc.title)}</h6>
                     <div class="small text-muted">${doc.file_type.toUpperCase()} &bull; ${formatBytes(doc.file_size)}</div>
+                    ${doc.pending_review ? '<div class="mt-1"><span class="badge bg-warning text-dark"><i class="bi bi-hourglass-split"></i> Pending Review</span></div>' : ''}
                     <div class="mt-1">${doc.tags.map(t => `<span class="badge bg-primary-subtle text-primary-emphasis me-1">${escapeHtml(t.name)}</span>`).join('')}</div>
                 </div>
             </div>
@@ -488,7 +603,7 @@ function renderDocuments(data) {
         <a href="#" class="list-group-item list-group-item-action d-flex align-items-center gap-3" onclick="openDocument(${doc.id}); return false;">
             <img src="/api/documents/${doc.id}/thumbnail" class="rounded" style="width:48px;height:48px;object-fit:cover;" alt="" loading="lazy">
             <div class="flex-grow-1 min-w-0">
-                <div class="fw-semibold text-truncate">${escapeHtml(doc.title)}</div>
+                <div class="fw-semibold text-truncate">${escapeHtml(doc.title)}${doc.pending_review ? ' <span class="badge bg-warning text-dark"><i class="bi bi-hourglass-split"></i> Pending</span>' : ''}</div>
                 <div class="small text-muted">${doc.file_type.toUpperCase()} &bull; ${formatBytes(doc.file_size)} &bull; ${formatDate(doc.upload_date)}</div>
             </div>
             <div>${doc.tags.map(t => `<span class="badge bg-primary-subtle text-primary-emphasis me-1">${escapeHtml(t.name)}</span>`).join('')}</div>
@@ -533,6 +648,7 @@ function handleSearch(e) {
     e.preventDefault();
     currentQuery = document.getElementById('searchInput').value.trim();
     currentPage = 1;
+    pendingFilter = false;
     document.getElementById('clearSearchBtn').style.display = currentQuery ? '' : 'none';
     loadDocuments();
 }
@@ -541,6 +657,7 @@ function clearSearch() {
     document.getElementById('searchInput').value = '';
     currentQuery = '';
     currentPage = 1;
+    pendingFilter = false;
     document.getElementById('clearSearchBtn').style.display = 'none';
     loadDocuments();
 }
@@ -569,6 +686,7 @@ async function loadTags() {
 function filterByTag(tag) {
     currentTag = tag;
     currentPage = 1;
+    pendingFilter = false;
     loadTags();
     loadDocuments();
 }
@@ -823,6 +941,14 @@ function renderDocumentDetail(doc) {
         : '<span class="text-muted">None</span>';
     document.getElementById('docFieldNotes').textContent = doc.notes || '—';
     document.getElementById('docOcrText').textContent = doc.ocr_text || 'No OCR text extracted yet.';
+
+    // Show approve button for pending review documents
+    const approveBtn = document.getElementById('approveDocBtn');
+    if (doc.pending_review) {
+        approveBtn.classList.remove('d-none');
+    } else {
+        approveBtn.classList.add('d-none');
+    }
 
     document.getElementById('docDetailView').classList.remove('d-none');
     document.getElementById('docDetailEdit').classList.add('d-none');

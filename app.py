@@ -112,7 +112,8 @@ def init_db():
             notes TEXT DEFAULT '',
             upload_date TEXT NOT NULL,
             modified_date TEXT NOT NULL,
-            deleted_date TEXT DEFAULT NULL
+            deleted_date TEXT DEFAULT NULL,
+            pending_review INTEGER DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS tags (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -143,6 +144,9 @@ def init_db():
     columns = [row[1] for row in cursor.fetchall()]
     if 'deleted_date' not in columns:
         conn.execute("ALTER TABLE documents ADD COLUMN deleted_date TEXT DEFAULT NULL")
+        conn.commit()
+    if 'pending_review' not in columns:
+        conn.execute("ALTER TABLE documents ADD COLUMN pending_review INTEGER DEFAULT 0")
         conn.commit()
 
     conn.close()
@@ -286,6 +290,176 @@ def generate_thumbnail(file_path, file_type, stored_filename):
         img.save(str(thumb_path), 'PNG')
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------------------
+# SMB Watch helpers
+# ---------------------------------------------------------------------------
+
+smb_watcher_thread = None
+smb_watcher_stop = threading.Event()
+
+
+def _read_settings_direct():
+    """Read all settings from DB (for use outside Flask request context)."""
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("SELECT key, value FROM settings").fetchall()
+    conn.close()
+    return {r['key']: r['value'] for r in rows}
+
+
+def parse_smb_path(path):
+    """Parse SMB path into (server, unc_path).
+
+    Accepts: //server/share[/path], \\\\server\\share[\\path], smb://server/share[/path]
+    """
+    path = path.strip()
+    if path.startswith('smb://'):
+        parts = path[6:].replace('\\', '/').split('/')
+    elif path.startswith('\\\\'):
+        parts = path[2:].replace('\\', '/').split('/')
+    elif path.startswith('//'):
+        parts = path[2:].split('/')
+    else:
+        raise ValueError("Invalid SMB path. Use //server/share or \\\\server\\share format.")
+    parts = [p for p in parts if p]
+    if len(parts) < 2:
+        raise ValueError("SMB path must include server and share name (e.g., //server/share)")
+    server = parts[0]
+    unc_path = '\\\\' + '\\'.join(parts)
+    return server, unc_path
+
+
+def poll_smb_share():
+    """Check SMB share for new files and import them."""
+    try:
+        import smbclient
+    except ImportError:
+        print("SMB watcher: smbprotocol not installed")
+        return
+
+    settings = _read_settings_direct()
+    if settings.get('smb_enabled') != 'true':
+        return
+
+    smb_path = settings.get('smb_path', '')
+    smb_user = settings.get('smb_username', '')
+    smb_pass = settings.get('smb_password', '')
+    if not smb_path:
+        return
+
+    try:
+        server, unc_path = parse_smb_path(smb_path)
+    except ValueError as e:
+        print(f"SMB watcher: {e}")
+        return
+
+    try:
+        smbclient.register_session(server, username=smb_user or None, password=smb_pass or None)
+    except Exception as e:
+        print(f"SMB watcher: Failed to connect to {server}: {e}")
+        return
+
+    try:
+        entries = list(smbclient.scandir(unc_path))
+    except Exception as e:
+        print(f"SMB watcher: Failed to list {unc_path}: {e}")
+        return
+
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+
+    for entry in entries:
+        if not entry.is_file():
+            continue
+        filename = entry.name
+        if not allowed_file(filename):
+            continue
+        safe_filename = secure_filename(filename) or filename
+
+        # Skip if already imported and still pending review
+        existing = conn.execute(
+            "SELECT id FROM documents WHERE original_filename = ? AND pending_review = 1 AND deleted_date IS NULL",
+            (safe_filename,)
+        ).fetchone()
+        if existing:
+            continue
+
+        ext = safe_filename.rsplit('.', 1)[1].lower() if '.' in safe_filename else 'bin'
+        stored_filename = f"{uuid.uuid4().hex}.{ext}"
+        local_path = UPLOAD_DIR / stored_filename
+        smb_file_path = unc_path.rstrip('\\') + '\\' + filename
+
+        try:
+            with smbclient.open_file(smb_file_path, mode='rb') as src:
+                with open(str(local_path), 'wb') as dst:
+                    shutil.copyfileobj(src, dst)
+        except Exception as e:
+            print(f"SMB watcher: Failed to download {filename}: {e}")
+            if local_path.exists():
+                local_path.unlink()
+            continue
+
+        file_size = local_path.stat().st_size
+        file_type = ext if ext != 'jpeg' else 'jpg'
+        title = safe_filename.rsplit('.', 1)[0] if '.' in safe_filename else safe_filename
+        now = datetime.utcnow().isoformat()
+
+        cur = conn.execute(
+            """INSERT INTO documents
+               (title, original_filename, stored_filename, file_type, file_size, notes, upload_date, modified_date, pending_review)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)""",
+            (title, safe_filename, stored_filename, file_type, file_size, '', now, now)
+        )
+        doc_id = cur.lastrowid
+        conn.commit()
+
+        generate_thumbnail(local_path, file_type, stored_filename)
+        update_progress(doc_id, 'pending', 0, 'Queued for OCR')
+        thread = threading.Thread(target=run_ocr, args=(doc_id, local_path, file_type), daemon=True)
+        thread.start()
+
+        # Delete from SMB share after successful import
+        try:
+            smbclient.remove(smb_file_path)
+            print(f"SMB watcher: Imported '{filename}'")
+        except Exception as e:
+            print(f"SMB watcher: Imported '{filename}' but failed to delete from share: {e}")
+
+    conn.close()
+
+
+def smb_watcher_loop():
+    """Background loop that polls SMB share."""
+    while not smb_watcher_stop.is_set():
+        try:
+            poll_smb_share()
+        except Exception as e:
+            print(f"SMB watcher error: {e}")
+        settings = _read_settings_direct()
+        interval = max(10, int(settings.get('smb_poll_interval', '60')))
+        smb_watcher_stop.wait(timeout=interval)
+
+
+def start_smb_watcher():
+    global smb_watcher_thread
+    stop_smb_watcher()
+    smb_watcher_stop.clear()
+    smb_watcher_thread = threading.Thread(target=smb_watcher_loop, daemon=True)
+    smb_watcher_thread.start()
+    print("SMB watcher started")
+
+
+def stop_smb_watcher():
+    global smb_watcher_thread
+    if smb_watcher_thread and smb_watcher_thread.is_alive():
+        smb_watcher_stop.set()
+        smb_watcher_thread.join(timeout=5)
+        print("SMB watcher stopped")
+    smb_watcher_thread = None
 
 
 # ---------------------------------------------------------------------------
@@ -445,6 +619,7 @@ def list_documents():
     q = request.args.get('q', '').strip()
     sort = request.args.get('sort', 'upload_date')
     order = request.args.get('order', 'desc')
+    pending_only = request.args.get('pending', '').lower() in ('true', '1')
 
     if sort not in ('upload_date', 'title', 'modified_date'):
         sort = 'upload_date'
@@ -455,6 +630,9 @@ def list_documents():
     params = []
 
     conditions.append("d.deleted_date IS NULL")
+
+    if pending_only:
+        conditions.append("d.pending_review = 1")
 
     if q:
         conditions.append("(d.title LIKE ? OR d.ocr_text LIKE ? OR d.notes LIKE ?)")
@@ -815,6 +993,58 @@ def reocr_document(doc_id):
     thread.start()
 
     return jsonify({'message': 'OCR re-processing started', 'status': 'pending'})
+
+
+# ---------------------------------------------------------------------------
+# Routes — Pending Review
+# ---------------------------------------------------------------------------
+
+@app.route('/api/documents/pending', methods=['GET'])
+@require_auth
+def list_pending_documents():
+    """List documents pending review (imported from SMB)
+    ---
+    responses:
+      200:
+        description: Pending review documents
+    """
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM documents WHERE pending_review = 1 AND deleted_date IS NULL ORDER BY upload_date DESC"
+    ).fetchall()
+    documents = [document_to_json(db, r) for r in rows]
+    return jsonify({'documents': documents, 'total': len(documents)})
+
+
+@app.route('/api/documents/<int:doc_id>/approve', methods=['POST'])
+@require_auth
+def approve_document(doc_id):
+    """Approve a pending review document
+    ---
+    parameters:
+      - name: doc_id
+        in: path
+        type: integer
+        required: true
+    responses:
+      200:
+        description: Document approved
+      404:
+        description: Document not found
+    """
+    db = get_db()
+    row = db.execute("SELECT * FROM documents WHERE id = ? AND deleted_date IS NULL", (doc_id,)).fetchone()
+    if not row:
+        return jsonify({'error': 'Document not found'}), 404
+    if not row['pending_review']:
+        return jsonify({'message': 'Document is already approved'})
+
+    now = datetime.utcnow().isoformat()
+    db.execute("UPDATE documents SET pending_review = 0, modified_date = ? WHERE id = ?", (now, doc_id))
+    db.commit()
+
+    updated = db.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+    return jsonify(document_to_json(db, updated))
 
 
 # ---------------------------------------------------------------------------
@@ -1443,6 +1673,146 @@ def admin_empty_trash():
 
 
 # ---------------------------------------------------------------------------
+# Routes — Admin: SMB Watch
+# ---------------------------------------------------------------------------
+
+@app.route('/api/admin/smb', methods=['GET'])
+@require_admin
+def admin_get_smb_settings():
+    """Get SMB watch settings
+    ---
+    responses:
+      200:
+        description: SMB settings (password excluded)
+    """
+    return jsonify({
+        'smb_path': get_setting('smb_path', ''),
+        'smb_username': get_setting('smb_username', ''),
+        'smb_password_set': bool(get_setting('smb_password', '')),
+        'smb_enabled': get_setting('smb_enabled', 'false') == 'true',
+        'smb_poll_interval': int(get_setting('smb_poll_interval', '60')),
+        'smb_watcher_running': smb_watcher_thread is not None and smb_watcher_thread.is_alive(),
+    })
+
+
+@app.route('/api/admin/smb', methods=['POST'])
+@require_admin
+def admin_update_smb_settings():
+    """Update SMB watch settings
+    ---
+    parameters:
+      - name: body
+        in: body
+        schema:
+          type: object
+          properties:
+            smb_path:
+              type: string
+            smb_username:
+              type: string
+            smb_password:
+              type: string
+            smb_poll_interval:
+              type: integer
+            smb_enabled:
+              type: boolean
+    responses:
+      200:
+        description: Settings updated
+    """
+    data = request.get_json(force=True)
+
+    if 'smb_path' in data:
+        path = data['smb_path'].strip()
+        if path:
+            try:
+                parse_smb_path(path)
+            except ValueError as e:
+                return jsonify({'error': str(e)}), 400
+        set_setting('smb_path', path)
+
+    if 'smb_username' in data:
+        set_setting('smb_username', data['smb_username'].strip())
+
+    if 'smb_password' in data and data['smb_password']:
+        set_setting('smb_password', data['smb_password'])
+
+    if 'smb_poll_interval' in data:
+        interval = max(10, int(data['smb_poll_interval']))
+        set_setting('smb_poll_interval', str(interval))
+
+    if 'smb_enabled' in data:
+        enabled = data['smb_enabled']
+        set_setting('smb_enabled', 'true' if enabled else 'false')
+        # Reset SMB connection cache when settings change
+        try:
+            import smbclient
+            smbclient.reset_connection_cache()
+        except (ImportError, Exception):
+            pass
+        if enabled:
+            start_smb_watcher()
+        else:
+            stop_smb_watcher()
+
+    return jsonify({'message': 'SMB settings updated'})
+
+
+@app.route('/api/admin/smb/test', methods=['POST'])
+@require_admin
+def admin_test_smb():
+    """Test SMB connection
+    ---
+    parameters:
+      - name: body
+        in: body
+        schema:
+          type: object
+          required: [smb_path]
+          properties:
+            smb_path:
+              type: string
+            smb_username:
+              type: string
+            smb_password:
+              type: string
+    responses:
+      200:
+        description: Connection test result
+    """
+    try:
+        import smbclient
+    except ImportError:
+        return jsonify({'error': 'smbprotocol is not installed'}), 500
+
+    data = request.get_json(force=True)
+    smb_path = data.get('smb_path', '').strip()
+    smb_user = data.get('smb_username', '').strip()
+    smb_pass = data.get('smb_password', '')
+
+    if not smb_path:
+        return jsonify({'error': 'SMB path is required'}), 400
+
+    # Use stored password if none provided
+    if not smb_pass:
+        smb_pass = get_setting('smb_password', '')
+
+    try:
+        server, unc_path = parse_smb_path(smb_path)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+    try:
+        smbclient.reset_connection_cache()
+        smbclient.register_session(server, username=smb_user or None, password=smb_pass or None)
+        entries = list(smbclient.scandir(unc_path))
+        file_count = sum(1 for e in entries if e.is_file())
+        return jsonify({'message': f'Connected successfully. {file_count} file(s) found in share.', 'success': True})
+    except Exception as e:
+        return jsonify({'error': f'Connection failed: {str(e)}', 'success': False}), 400
+
+
+# ---------------------------------------------------------------------------
 # Routes — Admin: System Info
 # ---------------------------------------------------------------------------
 
@@ -1495,6 +1865,10 @@ if __name__ == '__main__':
     purged = purge_expired_trash()
     if purged:
         print(f"Purged {purged} expired document(s) from trash")
+    # Start SMB watcher if enabled
+    settings = _read_settings_direct()
+    if settings.get('smb_enabled') == 'true':
+        start_smb_watcher()
     port = int(os.environ.get('PORT', 5000))
     debug = os.environ.get('FLASK_DEBUG', '0') == '1'
     app.run(host='0.0.0.0', port=port, debug=debug)
