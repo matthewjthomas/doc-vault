@@ -144,6 +144,11 @@
         <li class="nav-item">
             <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-system" type="button">System</button>
         </li>
+        <li class="nav-item">
+            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-trash" type="button">
+                <i class="bi bi-trash3"></i> Trash
+            </button>
+        </li>
     </ul>
     <div class="tab-content mt-3">
         <!-- Tailscale Tab -->
@@ -252,6 +257,36 @@
                     <button class="btn btn-outline-secondary btn-sm" onclick="loadSystemInfo()">
                         <i class="bi bi-arrow-repeat"></i> Refresh
                     </button>
+                </div>
+            </div>
+        </div>
+        <!-- Trash Tab -->
+        <div class="tab-pane fade" id="tab-trash">
+            <div class="card">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <p class="text-muted mb-0">Deleted documents are kept for 30 days before being permanently removed.</p>
+                        <div>
+                            <button class="btn btn-outline-secondary btn-sm me-1" onclick="loadTrash()">
+                                <i class="bi bi-arrow-repeat"></i> Refresh
+                            </button>
+                            <button class="btn btn-outline-danger btn-sm" onclick="emptyTrash()">
+                                <i class="bi bi-trash3"></i> Empty Trash
+                            </button>
+                        </div>
+                    </div>
+                    <div id="trashEmpty" class="text-center text-muted py-4 d-none">
+                        <i class="bi bi-trash3" style="font-size:2rem;"></i>
+                        <p class="mt-2">Trash is empty</p>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-hover table-sm d-none" id="trashTable">
+                            <thead><tr><th>Title</th><th>Original File</th><th>Deleted</th><th>Days Left</th><th></th></tr></thead>
+                            <tbody id="trashTableBody">
+                                <tr><td colspan="5" class="text-center text-muted">Loading...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>

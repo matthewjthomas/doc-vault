@@ -51,6 +51,7 @@ function showPage(page) {
         loadTailscaleStatus();
         loadUsers();
         loadSystemInfo();
+        loadTrash();
     }
 }
 
@@ -307,6 +308,75 @@ async function loadSystemInfo() {
             : '<span class="badge bg-secondary">Not connected</span>';
     } catch (err) {
         // silent
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Trash
+// ---------------------------------------------------------------------------
+async function loadTrash() {
+    try {
+        const data = await api('/api/admin/trash');
+        const tbody = document.getElementById('trashTableBody');
+        const emptyEl = document.getElementById('trashEmpty');
+        const tableEl = document.getElementById('trashTable');
+        if (!data.documents.length) {
+            emptyEl.classList.remove('d-none');
+            tableEl.classList.add('d-none');
+            return;
+        }
+        emptyEl.classList.add('d-none');
+        tableEl.classList.remove('d-none');
+        tbody.innerHTML = data.documents.map(doc => `
+            <tr>
+                <td>${escapeHtml(doc.title)}</td>
+                <td><small class="text-muted">${escapeHtml(doc.original_filename)}</small></td>
+                <td><small>${new Date(doc.deleted_date).toLocaleDateString()}</small></td>
+                <td><span class="badge ${doc.days_until_purge <= 7 ? 'bg-danger' : 'bg-secondary'}">${doc.days_until_purge}d</span></td>
+                <td class="text-end">
+                    <button class="btn btn-outline-success btn-sm me-1" onclick="restoreDocument(${doc.id})" title="Restore">
+                        <i class="bi bi-arrow-counterclockwise"></i>
+                    </button>
+                    <button class="btn btn-outline-danger btn-sm" onclick="permanentDeleteDocument(${doc.id})" title="Delete permanently">
+                        <i class="bi bi-x-lg"></i>
+                    </button>
+                </td>
+            </tr>
+        `).join('');
+    } catch (err) {
+        // silent
+    }
+}
+
+async function restoreDocument(docId) {
+    try {
+        await api(`/api/admin/trash/${docId}/restore`, { method: 'POST' });
+        showStatus('Document restored');
+        loadTrash();
+    } catch (err) {
+        showStatus(err.message, 'danger');
+    }
+}
+
+async function permanentDeleteDocument(docId) {
+    if (!confirm('Permanently delete this document? This cannot be undone.')) return;
+    try {
+        await api(`/api/admin/trash/${docId}`, { method: 'DELETE' });
+        showStatus('Document permanently deleted');
+        loadTrash();
+    } catch (err) {
+        showStatus(err.message, 'danger');
+    }
+}
+
+async function emptyTrash() {
+    if (!confirm('Permanently delete ALL documents in the trash? This cannot be undone.')) return;
+    try {
+        const data = await api('/api/admin/trash', { method: 'DELETE' });
+        showStatus(data.message);
+        loadTrash();
+    } catch (err) {
+        showStatus(err.message, 'danger');
     }
 }
 
@@ -868,7 +938,7 @@ function deleteCurrentDocument() {
             await api(`/api/documents/${currentDocId}`, { method: 'DELETE' });
             deleteModal.hide();
             bootstrap.Modal.getInstance(document.getElementById('docDetailModal')).hide();
-            showStatus('Document deleted');
+            showStatus('Document moved to trash');
             loadDocuments();
             loadTags();
         } catch (err) {

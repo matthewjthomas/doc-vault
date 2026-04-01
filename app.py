@@ -5,7 +5,7 @@ import subprocess
 import uuid
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 from io import BytesIO
 from pathlib import Path
@@ -111,7 +111,8 @@ def init_db():
             ocr_text TEXT DEFAULT '',
             notes TEXT DEFAULT '',
             upload_date TEXT NOT NULL,
-            modified_date TEXT NOT NULL
+            modified_date TEXT NOT NULL,
+            deleted_date TEXT DEFAULT NULL
         );
         CREATE TABLE IF NOT EXISTS tags (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -136,6 +137,14 @@ def init_db():
         );
     """)
     conn.commit()
+
+    # Migrations for existing databases
+    cursor = conn.execute("PRAGMA table_info(documents)")
+    columns = [row[1] for row in cursor.fetchall()]
+    if 'deleted_date' not in columns:
+        conn.execute("ALTER TABLE documents ADD COLUMN deleted_date TEXT DEFAULT NULL")
+        conn.commit()
+
     conn.close()
 
 
@@ -445,6 +454,8 @@ def list_documents():
     conditions = []
     params = []
 
+    conditions.append("d.deleted_date IS NULL")
+
     if q:
         conditions.append("(d.title LIKE ? OR d.ocr_text LIKE ? OR d.notes LIKE ?)")
         like = f'%{q}%'
@@ -580,7 +591,7 @@ def get_document(doc_id):
         description: Document not found
     """
     db = get_db()
-    row = db.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+    row = db.execute("SELECT * FROM documents WHERE id = ? AND deleted_date IS NULL", (doc_id,)).fetchone()
     if not row:
         return jsonify({'error': 'Document not found'}), 404
     return jsonify(document_to_json(db, row))
@@ -616,7 +627,7 @@ def update_document(doc_id):
         description: Document not found
     """
     db = get_db()
-    row = db.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+    row = db.execute("SELECT * FROM documents WHERE id = ? AND deleted_date IS NULL", (doc_id,)).fetchone()
     if not row:
         return jsonify({'error': 'Document not found'}), 404
 
@@ -657,29 +668,20 @@ def delete_document(doc_id):
         description: Document not found
     """
     db = get_db()
-    row = db.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+    row = db.execute("SELECT * FROM documents WHERE id = ? AND deleted_date IS NULL", (doc_id,)).fetchone()
     if not row:
         return jsonify({'error': 'Document not found'}), 404
 
-    # Delete file
-    file_path = UPLOAD_DIR / row['stored_filename']
-    if file_path.exists():
-        file_path.unlink()
-
-    # Delete thumbnail
-    thumb_path = THUMB_DIR / f"{row['stored_filename']}.png"
-    if thumb_path.exists():
-        thumb_path.unlink()
-
-    db.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
-    cleanup_orphan_tags(db)
+    # Soft delete — move to trash
+    now = datetime.utcnow().isoformat()
+    db.execute("UPDATE documents SET deleted_date = ? WHERE id = ?", (now, doc_id))
     db.commit()
 
     # Clean up progress
     with processing_lock:
         processing_status.pop(doc_id, None)
 
-    return jsonify({'message': 'Document deleted'})
+    return jsonify({'message': 'Document moved to trash'})
 
 
 @app.route('/api/documents/<int:doc_id>/file', methods=['GET'])
@@ -699,7 +701,7 @@ def download_file(doc_id):
         description: Document not found
     """
     db = get_db()
-    row = db.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+    row = db.execute("SELECT * FROM documents WHERE id = ? AND deleted_date IS NULL", (doc_id,)).fetchone()
     if not row:
         return jsonify({'error': 'Document not found'}), 404
 
@@ -727,7 +729,7 @@ def get_thumbnail(doc_id):
         description: Thumbnail not found
     """
     db = get_db()
-    row = db.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+    row = db.execute("SELECT * FROM documents WHERE id = ? AND deleted_date IS NULL", (doc_id,)).fetchone()
     if not row:
         return jsonify({'error': 'Document not found'}), 404
 
@@ -775,7 +777,7 @@ def get_processing_status(doc_id):
     if info is None:
         # Not in progress tracking — check if document exists
         db = get_db()
-        row = db.execute("SELECT id, ocr_text FROM documents WHERE id = ?", (doc_id,)).fetchone()
+        row = db.execute("SELECT id, ocr_text FROM documents WHERE id = ? AND deleted_date IS NULL", (doc_id,)).fetchone()
         if not row:
             return jsonify({'error': 'Document not found'}), 404
         return jsonify({'status': 'complete', 'progress': 100, 'message': 'OCR complete'})
@@ -800,7 +802,7 @@ def reocr_document(doc_id):
         description: Document not found
     """
     db = get_db()
-    row = db.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+    row = db.execute("SELECT * FROM documents WHERE id = ? AND deleted_date IS NULL", (doc_id,)).fetchone()
     if not row:
         return jsonify({'error': 'Document not found'}), 404
 
@@ -833,6 +835,7 @@ def list_tags():
         SELECT t.id, t.name, COUNT(dt.document_id) as doc_count
         FROM tags t
         LEFT JOIN document_tags dt ON dt.tag_id = t.id
+        LEFT JOIN documents d ON d.id = dt.document_id AND d.deleted_date IS NULL
         GROUP BY t.id
         ORDER BY t.name
     """).fetchall()
@@ -903,6 +906,8 @@ def search_documents():
 
     conditions = []
     params = []
+
+    conditions.append("d.deleted_date IS NULL")
 
     if q:
         conditions.append("(d.title LIKE ? OR d.ocr_text LIKE ? OR d.notes LIKE ?)")
@@ -1302,6 +1307,141 @@ def admin_tailscale_disable():
 
 
 # ---------------------------------------------------------------------------
+# Routes — Admin: Trash
+# ---------------------------------------------------------------------------
+
+def purge_expired_trash():
+    """Permanently delete documents that have been in trash for over 30 days."""
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    cutoff = (datetime.utcnow() - timedelta(days=30)).isoformat()
+    rows = conn.execute("SELECT * FROM documents WHERE deleted_date IS NOT NULL AND deleted_date < ?", (cutoff,)).fetchall()
+    for row in rows:
+        file_path = UPLOAD_DIR / row['stored_filename']
+        if file_path.exists():
+            file_path.unlink()
+        thumb_path = THUMB_DIR / f"{row['stored_filename']}.png"
+        if thumb_path.exists():
+            thumb_path.unlink()
+        conn.execute("DELETE FROM documents WHERE id = ?", (row['id'],))
+    if rows:
+        # Clean up orphan tags
+        conn.execute("""DELETE FROM tags WHERE id NOT IN (
+            SELECT DISTINCT tag_id FROM document_tags
+        )""")
+    conn.commit()
+    conn.close()
+    return len(rows)
+
+
+@app.route('/api/admin/trash', methods=['GET'])
+@require_admin
+def admin_list_trash():
+    """List all documents in the trash
+    ---
+    responses:
+      200:
+        description: Trashed documents
+    """
+    db = get_db()
+    rows = db.execute("SELECT * FROM documents WHERE deleted_date IS NOT NULL ORDER BY deleted_date DESC").fetchall()
+    documents = []
+    for r in rows:
+        d = document_to_json(db, r)
+        deleted_dt = datetime.fromisoformat(r['deleted_date'])
+        days_left = 30 - (datetime.utcnow() - deleted_dt).days
+        d['days_until_purge'] = max(0, days_left)
+        documents.append(d)
+    return jsonify({'documents': documents, 'total': len(documents)})
+
+
+@app.route('/api/admin/trash/<int:doc_id>/restore', methods=['POST'])
+@require_admin
+def admin_restore_document(doc_id):
+    """Restore a document from the trash
+    ---
+    parameters:
+      - name: doc_id
+        in: path
+        type: integer
+        required: true
+    responses:
+      200:
+        description: Document restored
+      404:
+        description: Document not found in trash
+    """
+    db = get_db()
+    row = db.execute("SELECT * FROM documents WHERE id = ? AND deleted_date IS NOT NULL", (doc_id,)).fetchone()
+    if not row:
+        return jsonify({'error': 'Document not found in trash'}), 404
+    db.execute("UPDATE documents SET deleted_date = NULL WHERE id = ?", (doc_id,))
+    db.commit()
+    return jsonify({'message': 'Document restored'})
+
+
+@app.route('/api/admin/trash/<int:doc_id>', methods=['DELETE'])
+@require_admin
+def admin_permanent_delete(doc_id):
+    """Permanently delete a document from the trash
+    ---
+    parameters:
+      - name: doc_id
+        in: path
+        type: integer
+        required: true
+    responses:
+      200:
+        description: Document permanently deleted
+      404:
+        description: Document not found in trash
+    """
+    db = get_db()
+    row = db.execute("SELECT * FROM documents WHERE id = ? AND deleted_date IS NOT NULL", (doc_id,)).fetchone()
+    if not row:
+        return jsonify({'error': 'Document not found in trash'}), 404
+
+    file_path = UPLOAD_DIR / row['stored_filename']
+    if file_path.exists():
+        file_path.unlink()
+
+    thumb_path = THUMB_DIR / f"{row['stored_filename']}.png"
+    if thumb_path.exists():
+        thumb_path.unlink()
+
+    db.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
+    cleanup_orphan_tags(db)
+    db.commit()
+
+    return jsonify({'message': 'Document permanently deleted'})
+
+
+@app.route('/api/admin/trash', methods=['DELETE'])
+@require_admin
+def admin_empty_trash():
+    """Permanently delete all documents in the trash
+    ---
+    responses:
+      200:
+        description: Trash emptied
+    """
+    db = get_db()
+    rows = db.execute("SELECT * FROM documents WHERE deleted_date IS NOT NULL").fetchall()
+    for row in rows:
+        file_path = UPLOAD_DIR / row['stored_filename']
+        if file_path.exists():
+            file_path.unlink()
+        thumb_path = THUMB_DIR / f"{row['stored_filename']}.png"
+        if thumb_path.exists():
+            thumb_path.unlink()
+    db.execute("DELETE FROM documents WHERE deleted_date IS NOT NULL")
+    cleanup_orphan_tags(db)
+    db.commit()
+    return jsonify({'message': f'{len(rows)} document(s) permanently deleted'})
+
+
+# ---------------------------------------------------------------------------
 # Routes — Admin: System Info
 # ---------------------------------------------------------------------------
 
@@ -1315,7 +1455,7 @@ def admin_system_info():
         description: System info
     """
     db = get_db()
-    doc_count = db.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+    doc_count = db.execute("SELECT COUNT(*) FROM documents WHERE deleted_date IS NULL").fetchone()[0]
     tag_count = db.execute("SELECT COUNT(*) FROM tags").fetchone()[0]
     user_count = db.execute("SELECT COUNT(*) FROM allowed_users").fetchone()[0]
 
@@ -1351,6 +1491,9 @@ def health():
 
 if __name__ == '__main__':
     init_db()
+    purged = purge_expired_trash()
+    if purged:
+        print(f"Purged {purged} expired document(s) from trash")
     port = int(os.environ.get('PORT', 5000))
     debug = os.environ.get('FLASK_DEBUG', '0') == '1'
     app.run(host='0.0.0.0', port=port, debug=debug)

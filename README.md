@@ -13,6 +13,7 @@ A self-hosted document management web app with OCR, tagging, and full-text searc
 - **API docs** — Built-in Swagger UI at `/apidocs`
 - **Tailscale auth** — Optional Tailscale Serve integration for HTTPS and identity-based access control
 - **Role-based access** — Admin and user roles managed through the maintenance page
+- **Trash bin** — Deleted documents are kept for 30 days before permanent removal; admins can restore or permanently delete from the Maintenance → Trash tab
 - **Mobile-friendly** — Responsive UI with camera capture support on mobile devices
 
 ## Quick Start
