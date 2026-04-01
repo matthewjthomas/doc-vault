@@ -1214,9 +1214,10 @@ def admin_tailscale_enable():
     try:
         subprocess.run(['pgrep', '-x', 'tailscaled'], capture_output=True, check=True)
     except subprocess.CalledProcessError:
-        # Start tailscaled
+        # Start tailscaled in userspace networking mode (no TUN device / capabilities needed)
         subprocess.Popen(
-            ['tailscaled', '--state=/app/data/tailscale/tailscaled.state',
+            ['tailscaled', '--tun=userspace-networking',
+             '--state=/app/data/tailscale/tailscaled.state',
              '--socket=/var/run/tailscale/tailscaled.sock'],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )

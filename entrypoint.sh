@@ -10,7 +10,7 @@ STATE_FILE="/app/data/tailscale/tailscaled.state"
 # Start tailscaled if state exists (i.e., Tailscale was previously enabled)
 if [ -f "$STATE_FILE" ]; then
     echo "Starting tailscaled..."
-    tailscaled --state="$STATE_FILE" --socket=/var/run/tailscale/tailscaled.sock &
+    tailscaled --tun=userspace-networking --state="$STATE_FILE" --socket=/var/run/tailscale/tailscaled.sock &
     sleep 2
 
     # Check if Tailscale was enabled in settings — read from SQLite

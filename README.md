@@ -54,11 +54,6 @@ services:
       - SECRET_KEY=change-me-to-something-secret
       - MAX_UPLOAD_MB=50
       # - AUTH_BYPASS=true
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
     restart: unless-stopped
 ```
 
@@ -114,15 +109,7 @@ The app is now accessible at `https://<hostname>.<your-tailnet>.ts.net` with Tai
 
 ### Docker Requirements for Tailscale
 
-The `docker-compose.yml` includes the necessary capabilities:
-
-```yaml
-devices:
-  - /dev/net/tun:/dev/net/tun
-cap_add:
-  - NET_ADMIN
-  - NET_RAW
-```
+Tailscale runs in **userspace networking mode** (`--tun=userspace-networking`), so no special Docker capabilities (`NET_ADMIN`, `NET_RAW`) or `/dev/net/tun` device access are needed. All tailnet traffic is proxied through Tailscale Serve rather than a kernel TUN device.
 
 ## Authentication Model
 
@@ -131,6 +118,8 @@ cap_add:
 | `AUTH_BYPASS=true` | Full admin access, no auth checks |
 | Tailscale Serve (HTTPS via tailnet) | User identified by `Tailscale-User-Login` header, checked against allowed users list |
 | Direct access (no bypass, no Tailscale) | Access denied (403) |
+
+> **Note:** Because Tailscale runs in userspace networking mode, direct access via Tailscale IP (`100.x.x.x:5000`) is not available. All tailnet access goes through Tailscale Serve (`https://hostname.ts.net`).
 
 ### Roles
 

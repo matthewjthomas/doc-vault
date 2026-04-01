@@ -12,9 +12,4 @@ services:
       - MAX_UPLOAD_MB=50
       # Set AUTH_BYPASS=true to skip Tailscale auth (for development)
       - AUTH_BYPASS=true
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
     restart: unless-stopped
