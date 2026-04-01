@@ -331,6 +331,110 @@ def parse_smb_path(path):
     return server, unc_path
 
 
+def _import_file_entry(conn, filename, open_source, delete_source, source_label):
+    """Import a single file into DocVault as pending review.
+
+    Args:
+        conn: SQLite connection
+        filename: Original filename
+        open_source: callable() -> file-like object (binary read)
+        delete_source: callable() to remove original after import
+        source_label: label for log messages (e.g. 'SMB watcher', 'Share watcher')
+    Returns True if imported, False if skipped/failed.
+    """
+    if not allowed_file(filename):
+        return False
+    safe_filename = secure_filename(filename) or filename
+
+    existing = conn.execute(
+        "SELECT id FROM documents WHERE original_filename = ? AND pending_review = 1 AND deleted_date IS NULL",
+        (safe_filename,)
+    ).fetchone()
+    if existing:
+        return False
+
+    ext = safe_filename.rsplit('.', 1)[1].lower() if '.' in safe_filename else 'bin'
+    stored_filename = f"{uuid.uuid4().hex}.{ext}"
+    local_path = UPLOAD_DIR / stored_filename
+
+    try:
+        with open_source() as src:
+            with open(str(local_path), 'wb') as dst:
+                shutil.copyfileobj(src, dst)
+    except Exception as e:
+        print(f"{source_label}: Failed to copy {filename}: {e}")
+        if local_path.exists():
+            local_path.unlink()
+        return False
+
+    file_size = local_path.stat().st_size
+    file_type = ext if ext != 'jpeg' else 'jpg'
+    title = safe_filename.rsplit('.', 1)[0] if '.' in safe_filename else safe_filename
+    now = datetime.utcnow().isoformat()
+
+    cur = conn.execute(
+        """INSERT INTO documents
+           (title, original_filename, stored_filename, file_type, file_size, notes, upload_date, modified_date, pending_review)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)""",
+        (title, safe_filename, stored_filename, file_type, file_size, '', now, now)
+    )
+    doc_id = cur.lastrowid
+    conn.commit()
+
+    generate_thumbnail(local_path, file_type, stored_filename)
+    update_progress(doc_id, 'pending', 0, 'Queued for OCR')
+    thread = threading.Thread(target=run_ocr, args=(doc_id, local_path, file_type), daemon=True)
+    thread.start()
+
+    try:
+        delete_source()
+        print(f"{source_label}: Imported '{filename}'")
+    except Exception as e:
+        print(f"{source_label}: Imported '{filename}' but failed to delete from source: {e}")
+
+    return True
+
+
+def poll_local_folder():
+    """Check a local directory for new files and import them."""
+    settings = _read_settings_direct()
+    if settings.get('smb_enabled') != 'true':
+        return
+
+    watch_path = settings.get('smb_path', '')
+    if not watch_path:
+        return
+
+    folder = Path(watch_path)
+    if not folder.is_dir():
+        print(f"Share watcher: Folder not found: {watch_path}")
+        return
+
+    try:
+        entries = list(os.scandir(str(folder)))
+    except Exception as e:
+        print(f"Share watcher: Failed to list {watch_path}: {e}")
+        return
+
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+
+    for entry in entries:
+        if not entry.is_file():
+            continue
+        src_path = entry.path
+        _import_file_entry(
+            conn, entry.name,
+            open_source=lambda p=src_path: open(p, 'rb'),
+            delete_source=lambda p=src_path: os.remove(p),
+            source_label='Share watcher',
+        )
+
+    conn.close()
+
+
 def poll_smb_share():
     """Check SMB share for new files and import them."""
     try:
@@ -375,70 +479,29 @@ def poll_smb_share():
     for entry in entries:
         if not entry.is_file():
             continue
-        filename = entry.name
-        if not allowed_file(filename):
-            continue
-        safe_filename = secure_filename(filename) or filename
-
-        # Skip if already imported and still pending review
-        existing = conn.execute(
-            "SELECT id FROM documents WHERE original_filename = ? AND pending_review = 1 AND deleted_date IS NULL",
-            (safe_filename,)
-        ).fetchone()
-        if existing:
-            continue
-
-        ext = safe_filename.rsplit('.', 1)[1].lower() if '.' in safe_filename else 'bin'
-        stored_filename = f"{uuid.uuid4().hex}.{ext}"
-        local_path = UPLOAD_DIR / stored_filename
-        smb_file_path = unc_path.rstrip('\\') + '\\' + filename
-
-        try:
-            with smbclient.open_file(smb_file_path, mode='rb') as src:
-                with open(str(local_path), 'wb') as dst:
-                    shutil.copyfileobj(src, dst)
-        except Exception as e:
-            print(f"SMB watcher: Failed to download {filename}: {e}")
-            if local_path.exists():
-                local_path.unlink()
-            continue
-
-        file_size = local_path.stat().st_size
-        file_type = ext if ext != 'jpeg' else 'jpg'
-        title = safe_filename.rsplit('.', 1)[0] if '.' in safe_filename else safe_filename
-        now = datetime.utcnow().isoformat()
-
-        cur = conn.execute(
-            """INSERT INTO documents
-               (title, original_filename, stored_filename, file_type, file_size, notes, upload_date, modified_date, pending_review)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)""",
-            (title, safe_filename, stored_filename, file_type, file_size, '', now, now)
+        smb_file_path = unc_path.rstrip('\\') + '\\' + entry.name
+        _import_file_entry(
+            conn, entry.name,
+            open_source=lambda p=smb_file_path: smbclient.open_file(p, mode='rb'),
+            delete_source=lambda p=smb_file_path: smbclient.remove(p),
+            source_label='SMB watcher',
         )
-        doc_id = cur.lastrowid
-        conn.commit()
-
-        generate_thumbnail(local_path, file_type, stored_filename)
-        update_progress(doc_id, 'pending', 0, 'Queued for OCR')
-        thread = threading.Thread(target=run_ocr, args=(doc_id, local_path, file_type), daemon=True)
-        thread.start()
-
-        # Delete from SMB share after successful import
-        try:
-            smbclient.remove(smb_file_path)
-            print(f"SMB watcher: Imported '{filename}'")
-        except Exception as e:
-            print(f"SMB watcher: Imported '{filename}' but failed to delete from share: {e}")
 
     conn.close()
 
 
 def smb_watcher_loop():
-    """Background loop that polls SMB share."""
+    """Background loop that polls share."""
     while not smb_watcher_stop.is_set():
         try:
-            poll_smb_share()
+            settings = _read_settings_direct()
+            share_type = settings.get('share_type', 'smb')
+            if share_type == 'local':
+                poll_local_folder()
+            else:
+                poll_smb_share()
         except Exception as e:
-            print(f"SMB watcher error: {e}")
+            print(f"Share watcher error: {e}")
         settings = _read_settings_direct()
         interval = max(10, int(settings.get('smb_poll_interval', '60')))
         smb_watcher_stop.wait(timeout=interval)
@@ -1686,6 +1749,7 @@ def admin_get_smb_settings():
         description: SMB settings (password excluded)
     """
     return jsonify({
+        'share_type': get_setting('share_type', 'smb'),
         'smb_path': get_setting('smb_path', ''),
         'smb_username': get_setting('smb_username', ''),
         'smb_password_set': bool(get_setting('smb_password', '')),
@@ -1706,6 +1770,8 @@ def admin_update_smb_settings():
         schema:
           type: object
           properties:
+            share_type:
+              type: string
             smb_path:
               type: string
             smb_username:
@@ -1722,9 +1788,17 @@ def admin_update_smb_settings():
     """
     data = request.get_json(force=True)
 
+    if 'share_type' in data:
+        st = data['share_type']
+        if st not in ('smb', 'local'):
+            return jsonify({'error': 'Invalid share_type'}), 400
+        set_setting('share_type', st)
+
+    current_type = data.get('share_type', get_setting('share_type', 'smb'))
+
     if 'smb_path' in data:
         path = data['smb_path'].strip()
-        if path:
+        if path and current_type == 'smb':
             try:
                 parse_smb_path(path)
             except ValueError as e:
@@ -1744,24 +1818,24 @@ def admin_update_smb_settings():
     if 'smb_enabled' in data:
         enabled = data['smb_enabled']
         set_setting('smb_enabled', 'true' if enabled else 'false')
-        # Reset SMB connection cache when settings change
-        try:
-            import smbclient
-            smbclient.reset_connection_cache()
-        except (ImportError, Exception):
-            pass
+        if current_type == 'smb':
+            try:
+                import smbclient
+                smbclient.reset_connection_cache()
+            except (ImportError, Exception):
+                pass
         if enabled:
             start_smb_watcher()
         else:
             stop_smb_watcher()
 
-    return jsonify({'message': 'SMB settings updated'})
+    return jsonify({'message': 'Share watch settings updated'})
 
 
 @app.route('/api/admin/smb/test', methods=['POST'])
 @require_admin
 def admin_test_smb():
-    """Test SMB connection
+    """Test share connection
     ---
     parameters:
       - name: body
@@ -1770,6 +1844,8 @@ def admin_test_smb():
           type: object
           required: [smb_path]
           properties:
+            share_type:
+              type: string
             smb_path:
               type: string
             smb_username:
@@ -1780,18 +1856,36 @@ def admin_test_smb():
       200:
         description: Connection test result
     """
+    data = request.get_json(force=True)
+    share_type = data.get('share_type', get_setting('share_type', 'smb'))
+    smb_path = data.get('smb_path', '').strip()
+
+    if not smb_path:
+        return jsonify({'error': 'Path is required'}), 400
+
+    if share_type == 'local':
+        folder = Path(smb_path)
+        if not folder.exists():
+            return jsonify({'error': f'Path does not exist: {smb_path}', 'success': False}), 400
+        if not folder.is_dir():
+            return jsonify({'error': f'Path is not a directory: {smb_path}', 'success': False}), 400
+        try:
+            entries = list(os.scandir(str(folder)))
+            file_count = sum(1 for e in entries if e.is_file())
+            return jsonify({'message': f'Folder accessible. {file_count} file(s) found.', 'success': True})
+        except PermissionError:
+            return jsonify({'error': f'Permission denied: {smb_path}', 'success': False}), 400
+        except Exception as e:
+            return jsonify({'error': f'Failed to read folder: {str(e)}', 'success': False}), 400
+
+    # SMB mode
     try:
         import smbclient
     except ImportError:
         return jsonify({'error': 'smbprotocol is not installed'}), 500
 
-    data = request.get_json(force=True)
-    smb_path = data.get('smb_path', '').strip()
     smb_user = data.get('smb_username', '').strip()
     smb_pass = data.get('smb_password', '')
-
-    if not smb_path:
-        return jsonify({'error': 'SMB path is required'}), 400
 
     # Use stored password if none provided
     if not smb_pass:

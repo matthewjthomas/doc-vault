@@ -385,9 +385,30 @@ async function emptyTrash() {
 // ---------------------------------------------------------------------------
 // Share Watch
 // ---------------------------------------------------------------------------
+function toggleShareType() {
+    const type = document.getElementById('shareType').value;
+    const creds = document.getElementById('smbCredentials');
+    const pathLabel = document.getElementById('sharePathLabel');
+    const pathInput = document.getElementById('smbPath');
+    const pathHelp = document.getElementById('sharePathHelp');
+    if (type === 'local') {
+        creds.style.display = 'none';
+        pathLabel.textContent = 'Folder Path';
+        pathInput.placeholder = '/app/scanner';
+        pathHelp.textContent = 'Absolute path inside the container, e.g. /app/scanner';
+    } else {
+        creds.style.display = '';
+        pathLabel.textContent = 'SMB Path';
+        pathInput.placeholder = '//server/share/folder';
+        pathHelp.textContent = 'e.g. //nas/scans or \\\\192.168.1.100\\Scans';
+    }
+}
+
 async function loadSmbSettings() {
     try {
         const data = await api('/api/admin/smb');
+        document.getElementById('shareType').value = data.share_type || 'smb';
+        toggleShareType();
         document.getElementById('smbPath').value = data.smb_path;
         document.getElementById('smbUsername').value = data.smb_username;
         document.getElementById('smbPassword').value = '';
@@ -403,6 +424,7 @@ async function loadSmbSettings() {
 
 async function saveSmbSettings() {
     const payload = {
+        share_type: document.getElementById('shareType').value,
         smb_path: document.getElementById('smbPath').value.trim(),
         smb_username: document.getElementById('smbUsername').value.trim(),
         smb_poll_interval: parseInt(document.getElementById('smbPollInterval').value) || 60,
@@ -417,7 +439,7 @@ async function saveSmbSettings() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
         });
-        showStatus('SMB settings saved');
+        showStatus('Share watch settings saved');
         loadSmbSettings();
     } catch (err) {
         showStatus(err.message, 'danger');
@@ -430,6 +452,7 @@ async function testSmbConnection() {
     resultEl.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Testing connection...';
 
     const payload = {
+        share_type: document.getElementById('shareType').value,
         smb_path: document.getElementById('smbPath').value.trim(),
         smb_username: document.getElementById('smbUsername').value.trim(),
         smb_password: document.getElementById('smbPassword').value,

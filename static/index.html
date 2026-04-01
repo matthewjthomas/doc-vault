@@ -304,20 +304,31 @@
         <div class="tab-pane fade" id="tab-smb">
             <div class="card">
                 <div class="card-body">
-                    <p class="text-muted mb-3">Watch an SMB network share for new files and automatically import them for review.</p>
+                    <p class="text-muted mb-3" id="shareWatchDesc">Watch a network share or local folder for new files and automatically import them for review.</p>
                     <div class="row g-3">
                         <div class="col-12">
-                            <label class="form-label fw-semibold">SMB Path</label>
+                            <label class="form-label fw-semibold">Source Type</label>
+                            <select class="form-select" id="shareType" onchange="toggleShareType()">
+                                <option value="smb">SMB Network Share</option>
+                                <option value="local">Local Folder</option>
+                            </select>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label fw-semibold" id="sharePathLabel">SMB Path</label>
                             <input type="text" class="form-control" id="smbPath" placeholder="//server/share/folder">
-                            <div class="form-text">e.g. //nas/scans or \\192.168.1.100\Scans</div>
+                            <div class="form-text" id="sharePathHelp">e.g. //nas/scans or \\192.168.1.100\Scans</div>
                         </div>
-                        <div class="col-md-6">
-                            <label class="form-label fw-semibold">Username</label>
-                            <input type="text" class="form-control" id="smbUsername" placeholder="username">
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label fw-semibold">Password</label>
-                            <input type="password" class="form-control" id="smbPassword" placeholder="password">
+                        <div id="smbCredentials">
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold">Username</label>
+                                    <input type="text" class="form-control" id="smbUsername" placeholder="username">
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold">Password</label>
+                                    <input type="password" class="form-control" id="smbPassword" placeholder="password">
+                                </div>
+                            </div>
                         </div>
                         <div class="col-md-4">
                             <label class="form-label fw-semibold">Poll Interval (seconds)</label>
