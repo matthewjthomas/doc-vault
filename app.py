@@ -53,7 +53,7 @@ THUMB_DIR = UPLOAD_DIR / 'thumbnails'
 DB_PATH = DB_DIR / 'docvault.db'
 
 ALLOWED_EXTENSIONS = {'pdf', 'png', 'jpg', 'jpeg', 'gif', 'tiff', 'tif', 'bmp', 'webp'}
-THUMB_SIZE = (300, 300)
+THUMB_SIZE = (600, 600)
 
 # In-memory progress tracking for OCR processing
 processing_status = {}
@@ -276,7 +276,7 @@ def generate_thumbnail(file_path, file_type, stored_filename):
     thumb_path = THUMB_DIR / f"{stored_filename}.png"
     try:
         if file_type == 'pdf':
-            images = convert_from_path(str(file_path), dpi=72, first_page=1, last_page=1)
+            images = convert_from_path(str(file_path), dpi=150, first_page=1, last_page=1)
             if images:
                 img = images[0]
             else:
@@ -1938,6 +1938,40 @@ def admin_system_info():
         'db_size': db_size,
         'upload_size': upload_size,
         'tailscale_connected': ts_status is not None and ts_status.get('BackendState') == 'Running',
+    })
+
+
+@app.route('/api/admin/regenerate-thumbnails', methods=['POST'])
+@require_admin
+def admin_regenerate_thumbnails():
+    """Regenerate all document thumbnails
+    ---
+    responses:
+      200:
+        description: Thumbnails regenerated
+    """
+    db = get_db()
+    rows = db.execute(
+        "SELECT id, stored_filename, file_type FROM documents WHERE deleted_date IS NULL"
+    ).fetchall()
+
+    success = 0
+    failed = 0
+    for row in rows:
+        file_path = UPLOAD_DIR / row['stored_filename']
+        if not file_path.exists():
+            failed += 1
+            continue
+        try:
+            generate_thumbnail(file_path, row['file_type'], row['stored_filename'])
+            success += 1
+        except Exception:
+            failed += 1
+
+    return jsonify({
+        'message': f'Regenerated {success} thumbnail(s)' + (f', {failed} failed' if failed else ''),
+        'success': success,
+        'failed': failed,
     })
 
 

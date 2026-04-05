@@ -313,6 +313,23 @@ async function loadSystemInfo() {
     }
 }
 
+async function regenerateThumbnails() {
+    const btn = document.getElementById('regenThumbBtn');
+    const resultEl = document.getElementById('regenThumbResult');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Regenerating...';
+    resultEl.textContent = '';
+    try {
+        const data = await api('/api/admin/regenerate-thumbnails', { method: 'POST' });
+        resultEl.innerHTML = `<span class="text-success"><i class="bi bi-check-circle"></i> ${escapeHtml(data.message)}</span>`;
+    } catch (err) {
+        resultEl.innerHTML = `<span class="text-danger"><i class="bi bi-x-circle"></i> ${escapeHtml(err.message)}</span>`;
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-image"></i> Regenerate Thumbnails';
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Trash
 // ---------------------------------------------------------------------------

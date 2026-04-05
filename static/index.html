@@ -264,9 +264,13 @@
                             <tr><th>Tailscale</th><td id="sysTailscale">—</td></tr>
                         </tbody>
                     </table>
-                    <button class="btn btn-outline-secondary btn-sm" onclick="loadSystemInfo()">
+                    <button class="btn btn-outline-secondary btn-sm me-1" onclick="loadSystemInfo()">
                         <i class="bi bi-arrow-repeat"></i> Refresh
                     </button>
+                    <button class="btn btn-outline-primary btn-sm" id="regenThumbBtn" onclick="regenerateThumbnails()">
+                        <i class="bi bi-image"></i> Regenerate Thumbnails
+                    </button>
+                    <span id="regenThumbResult" class="ms-2 small"></span>
                 </div>
             </div>
         </div>
