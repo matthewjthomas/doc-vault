@@ -75,8 +75,8 @@ async function checkAuth() {
         const navUserInfo = document.getElementById('navUserInfo');
         navUser.style.display = '';
         const roleBadge = currentUser.role === 'admin'
-            ? '<span class="badge bg-danger ms-1">admin</span>'
-            : '<span class="badge bg-secondary ms-1">user</span>';
+            ? '<span class="badge bg-danger ms-1">Admin</span>'
+            : '<span class="badge bg-secondary ms-1">User</span>';
         navUserInfo.innerHTML = `<i class="bi bi-person-circle"></i> ${escapeHtml(currentUser.display_name)} ${roleBadge}`;
 
         // Show maintenance link for admins
